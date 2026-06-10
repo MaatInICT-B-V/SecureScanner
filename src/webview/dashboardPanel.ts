@@ -486,14 +486,6 @@ export class DashboardPanel {
       height: 32px;
       transform: translate(-50%, -50%);
       border-radius: 4px;
-      transition: transform 0.3s ease;
-    }
-    .shield-logo.scanning .inner-logo {
-      animation: spinLogo 1.5s linear infinite;
-    }
-    @keyframes spinLogo {
-      0% { transform: translate(-50%, -50%) rotate(0deg); }
-      100% { transform: translate(-50%, -50%) rotate(360deg); }
     }
     .disclaimer {
       margin-top: 32px;
@@ -843,7 +835,6 @@ export class DashboardPanel {
     document.getElementById('scanWorkspaceBtn').addEventListener('click', () => {
       document.getElementById('scanWorkspaceBtn').disabled = true;
       document.getElementById('scanWorkspaceBtn').textContent = 'Scanning...';
-      document.getElementById('shieldLogo').classList.add('scanning');
       vscode.postMessage({ command: 'scanWorkspace' });
     });
     document.getElementById('refreshBtn').addEventListener('click', () => {
@@ -892,7 +883,6 @@ export class DashboardPanel {
         if (message.status === 'done') {
           btn.disabled = false;
           btn.innerHTML = '&#128269; Scan Workspace';
-          document.getElementById('shieldLogo').classList.remove('scanning');
         }
       }
       if (message.type === 'pipUpdateStatus') {

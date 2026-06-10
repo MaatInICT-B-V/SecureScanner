@@ -3,8 +3,12 @@
 src/**
 out/**
 .gitignore
+.gitattributes
 *.map
 **/*.ts
+tsconfig.json
+.eslintrc*
+*.vsix
 !dist/**
 !media/**
 node_modules/**

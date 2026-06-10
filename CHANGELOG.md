@@ -2,6 +2,13 @@
 
 All notable changes to SecureScanner will be documented in this file.
 
+## [1.2.2] - 2026-06-10
+
+A false-positive release.
+
+### Fixed
+- **CRED-005 (Hardcoded Password) false positives on function calls** — Assignments whose value is a function or method call rather than a literal are no longer reported as hardcoded secrets. The placeholder heuristic now recognizes (dotted) code expressions, so `api_password = config.get('API_PASSWORD')` and `password = self._get_variable('API_PASSWORD')` are correctly treated as runtime lookups instead of credentials. Genuine literal assignments (e.g. `password = 'aB3xK9mQ7zP2wL5n'`) are still detected.
+
 ## [1.2.1] - 2026-06-10
 
 A false-positive and polish release.

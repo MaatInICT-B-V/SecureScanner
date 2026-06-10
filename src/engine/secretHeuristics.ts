@@ -38,6 +38,13 @@ const PLACEHOLDER_SUBSTRINGS = /(example|changeme|change[_-]?me|placeholder|your
 // (Optional[str], str, string | null, …) must never be treated as a secret.
 const TYPE_ANNOTATION = /^(?:Optional|Union|List|Dict|Set|Tuple|Sequence|Mapping|Iterable|Callable|Any|Type|str|int|float|bool|bytes|None|object|string|number|boolean|array|Array|Promise)\b|[[\]<>|]/;
 
+// The value is the start of a function/method call rather than a literal
+// secret: `config.get(`, `self._get_variable(`, `os.getenv(`, `getSecret(`.
+// The secret-capturing regexes stop at the opening quote of the call argument,
+// so a value that is a (dotted) identifier followed by "(" is a code reference
+// whose real value is produced at runtime — never a hardcoded credential.
+const CODE_EXPRESSION = /^[A-Za-z_$][\w$]*\s*(?:\.\s*[A-Za-z_$][\w$]*\s*)*\(/;
+
 // Values that, taken whole, are obviously not real secrets.
 const PLACEHOLDER_WORDS = new Set([
   'changeme', 'password', 'passwd', 'secret', 'apikey', 'api_key', 'token',
@@ -77,6 +84,10 @@ export function isPlaceholder(value: string): boolean {
   // Type annotations / code expressions (Optional[str], string | null, …) are
   // never literal secrets.
   if (TYPE_ANNOTATION.test(v)) { return true; }
+
+  // Function/method calls (config.get(...), self._get_variable(...)) are code
+  // references, not hardcoded secrets.
+  if (CODE_EXPRESSION.test(v)) { return true; }
 
   return false;
 }

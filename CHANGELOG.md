@@ -2,6 +2,13 @@
 
 All notable changes to SecureScanner will be documented in this file.
 
+## [1.2.4] - 2026-06-10
+
+A false-positive release.
+
+### Fixed
+- **CRED-005 (Hardcoded Password) false positives on variable references** — The placeholder heuristic now recognizes more kinds of runtime references, so they are no longer reported as hardcoded secrets: bare attribute references (`password = self.password`, `itshop_password = config.itshop_password`), UPPER_SNAKE_CASE constant / environment-variable names (`'API_PASSWORD': 'API_PASSWORD'`), and brace interpolations such as f-strings (`Password={self.password}` inside `f"…;Password={self.password}"`). Genuine literal assignments and lowercase word passwords (e.g. `password = 'hunter2xy'`) are still detected.
+
 ## [1.2.2] - 2026-06-10
 
 A false-positive release.

@@ -20,7 +20,7 @@ export function shannonEntropy(value: string): number {
 const PLACEHOLDER_PATTERNS: RegExp[] = [
   /\$\{[^}]*\}/,                 // ${VAR}
   /\$\([^)]*\)/,                 // $(VAR)
-  /\{\{[^}]*\}\}/,              // {{ template }}
+  /\{[^}]*\}/,                  // {self.password} f-string, {{ template }}, {0} — any brace interpolation
   /%[A-Za-z0-9_]+%/,            // %VAR% (Windows)
   /<[^>]+>/,                    // <your-token>
   /^process\.env\b/i,           // process.env.X
@@ -44,6 +44,17 @@ const TYPE_ANNOTATION = /^(?:Optional|Union|List|Dict|Set|Tuple|Sequence|Mapping
 // so a value that is a (dotted) identifier followed by "(" is a code reference
 // whose real value is produced at runtime — never a hardcoded credential.
 const CODE_EXPRESSION = /^[A-Za-z_$][\w$]*\s*(?:\.\s*[A-Za-z_$][\w$]*\s*)*\(/;
+
+// A bare dotted reference reads another variable/attribute at runtime rather
+// than being a literal secret: `password = self.password`,
+// `config.itshop_password`, `this.creds.password`. At least one dot is required
+// so a lone word like `hunter2` is still treated as a possible real password.
+const DOTTED_REFERENCE = /^[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)+$/;
+
+// An UPPER_SNAKE_CASE token (`API_PASSWORD`, `DB_SECRET`) is, by convention, an
+// environment-variable or constant name being referenced — e.g. the mapping
+// `'API_PASSWORD': 'API_PASSWORD'` — not a literal credential value.
+const CONSTANT_NAME = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
 
 // Values that, taken whole, are obviously not real secrets.
 const PLACEHOLDER_WORDS = new Set([
@@ -88,6 +99,13 @@ export function isPlaceholder(value: string): boolean {
   // Function/method calls (config.get(...), self._get_variable(...)) are code
   // references, not hardcoded secrets.
   if (CODE_EXPRESSION.test(v)) { return true; }
+
+  // Bare attribute references (self.password, config.itshop_password) read a
+  // value at runtime; they are not hardcoded secrets.
+  if (DOTTED_REFERENCE.test(v)) { return true; }
+
+  // UPPER_SNAKE_CASE constant / env-var names (API_PASSWORD) are references.
+  if (CONSTANT_NAME.test(v)) { return true; }
 
   return false;
 }

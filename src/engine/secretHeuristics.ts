@@ -32,6 +32,12 @@ const PLACEHOLDER_PATTERNS: RegExp[] = [
 // Strong placeholder indicators that may appear anywhere in the value.
 const PLACEHOLDER_SUBSTRINGS = /(example|changeme|change[_-]?me|placeholder|your[_-]?|dummy|redacted|sample|xxxx+|\.\.\.|todo|fixme)/i;
 
+// Type annotations and code expressions captured from declarations like
+// `password: Optional[str] = None` or `password: string | null`. These are
+// parameter/field signatures, not literal secrets, so the captured "value"
+// (Optional[str], str, string | null, …) must never be treated as a secret.
+const TYPE_ANNOTATION = /^(?:Optional|Union|List|Dict|Set|Tuple|Sequence|Mapping|Iterable|Callable|Any|Type|str|int|float|bool|bytes|None|object|string|number|boolean|array|Array|Promise)\b|[[\]<>|]/;
+
 // Values that, taken whole, are obviously not real secrets.
 const PLACEHOLDER_WORDS = new Set([
   'changeme', 'password', 'passwd', 'secret', 'apikey', 'api_key', 'token',
@@ -60,7 +66,17 @@ export function isPlaceholder(value: string): boolean {
 
   if (PLACEHOLDER_WORDS.has(v.toLowerCase())) { return true; }
 
+  // Strip surrounding/trailing punctuation so prose and docstring values such as
+  // "Password." (from an `Args:` section) or "(secret)" reduce to the bare word
+  // and match the placeholder list instead of being reported as real secrets.
+  const word = v.replace(/^[^A-Za-z0-9_]+/, '').replace(/[^A-Za-z0-9_]+$/, '');
+  if (word !== v && PLACEHOLDER_WORDS.has(word.toLowerCase())) { return true; }
+
   if (PLACEHOLDER_SUBSTRINGS.test(v)) { return true; }
+
+  // Type annotations / code expressions (Optional[str], string | null, …) are
+  // never literal secrets.
+  if (TYPE_ANNOTATION.test(v)) { return true; }
 
   return false;
 }

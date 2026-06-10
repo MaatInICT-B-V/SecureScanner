@@ -360,7 +360,14 @@ export const owaspRules: IScannerRule[] = [
     description: 'A secret-like value is written to logs. Avoid logging passwords, tokens or keys.',
     severity: Severity.Medium,
     category: FindingCategory.OWASP,
-    pattern: /(?:console\.(?:log|info|debug|warn|error)|(?:logger|logging)\.(?:info|debug|warning|warn|error)|\bprint|\bprintln|System\.out\.print(?:ln)?|fmt\.Print(?:ln|f)?)\s*\(\s*[^)]{0,80}(?:password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret|credit[_-]?card)/gi,
+    // Fire only when a secret-named *variable* is interpolated, concatenated or
+    // passed as a bare argument to the log call — i.e. a marker ({ ( , + % or
+    // ${) is immediately followed by an (optionally member-accessed) secret
+    // identifier matched as a whole word. This ignores the keyword appearing as
+    // descriptive label text ("Password is empty"), as part of a longer name
+    // (password_placeholder, itshop_password) or inside a masked expression
+    // ('*' * len(config.itshop_password)), which are all false positives.
+    pattern: /(?:console\.(?:log|info|debug|warn|error)|(?:logger|logging)\.(?:info|debug|warning|warn|error)|\bprint|\bprintln|System\.out\.print(?:ln)?|fmt\.Print(?:ln|f)?)\s*\(\s*(?:[^)]{0,120}?(?:[{(,+%]|\$\{)\s*)?(?:[A-Za-z_]\w*\.)*(?:password|passwd|pwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret|auth[_-]?token|private[_-]?key|credit[_-]?card)\b/gi,
     cweId: 'CWE-532',
     owaspId: 'A09:2021',
   },

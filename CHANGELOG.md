@@ -2,6 +2,18 @@
 
 All notable changes to SecureScanner will be documented in this file.
 
+## [1.2.1] - 2026-06-10
+
+A false-positive and polish release.
+
+### Fixed
+- **CRED-005 (Hardcoded Password) false positives** — Type-annotated parameters and fields (`password: Optional[str] = None`, `password: string | null`) and prose/docstring values (an `Args:` line like `password: Password.`) are no longer reported as hardcoded secrets. The placeholder heuristic now rejects type annotations and code expressions, and strips surrounding punctuation before the placeholder-word check.
+- **OWASP-032 (Sensitive Data in Logs) false positives** — The rule now fires only when a secret-named *variable* is actually interpolated, concatenated or passed to the log call, instead of whenever the word "password" appears as descriptive text. Cases such as `logger.info("Password is empty …")`, `logger.info(f"… placeholder='{password_placeholder}'")` and masked output like `print(f"Password: {'*' * len(config.itshop_password)}")` are no longer flagged, while genuine `log(password)` / `f"…{password}…"` logging is still detected.
+
+### Changed
+- **Dashboard branding** — The MaatInICT logo inside the shield no longer spins during a scan; it is now shown as a static, business-appropriate mark.
+- **Production packaging** — Release builds are minified and ship without source maps or the `src/` folder (`vscode:prepublish` now runs `build:prod`).
+
 ## [1.2.0] - 2026-06-10
 
 A major accuracy and coverage release. Dependency scanning is rebuilt on OSV's

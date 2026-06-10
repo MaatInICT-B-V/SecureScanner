@@ -1,5 +1,6 @@
 import { Finding, FindingLocation, Severity } from '../types/finding';
 import { IScannerRule, ScanContext } from '../types/scanner';
+import { isPlaceholder, shannonEntropy } from './secretHeuristics';
 
 interface CommentRange {
   start: number;
@@ -279,6 +280,17 @@ function executeRule(
         regex.lastIndex++;
       }
       continue;
+    }
+
+    // Heuristic noise filter for generic secret rules: skip placeholders and
+    // low-entropy values (env-var references, templates, validation text, …).
+    if (rule.secretGroup !== undefined) {
+      const candidate = match[rule.secretGroup] ?? '';
+      const tooLowEntropy =
+        rule.minEntropy !== undefined && shannonEntropy(candidate) < rule.minEntropy;
+      if (isPlaceholder(candidate) || tooLowEntropy) {
+        continue;
+      }
     }
 
     const location: FindingLocation = {

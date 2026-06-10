@@ -2002,6 +2002,111 @@ var ScannerRegistry = class {
   }
 };
 
+// src/engine/secretHeuristics.ts
+function shannonEntropy(value) {
+  if (!value) {
+    return 0;
+  }
+  const freq = /* @__PURE__ */ new Map();
+  for (const ch of value) {
+    freq.set(ch, (freq.get(ch) || 0) + 1);
+  }
+  let entropy = 0;
+  for (const count of freq.values()) {
+    const p = count / value.length;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+var PLACEHOLDER_PATTERNS = [
+  /\$\{[^}]*\}/,
+  // ${VAR}
+  /\$\([^)]*\)/,
+  // $(VAR)
+  /\{\{[^}]*\}\}/,
+  // {{ template }}
+  /%[A-Za-z0-9_]+%/,
+  // %VAR% (Windows)
+  /<[^>]+>/,
+  // <your-token>
+  /^process\.env\b/i,
+  // process.env.X
+  /^os\.environ\b/i,
+  // os.environ[...]
+  /^env\[/i,
+  // ENV['X']
+  /^System\.getenv\b/i
+];
+var PLACEHOLDER_SUBSTRINGS = /(example|changeme|change[_-]?me|placeholder|your[_-]?|dummy|redacted|sample|xxxx+|\.\.\.|todo|fixme)/i;
+var PLACEHOLDER_WORDS = /* @__PURE__ */ new Set([
+  "changeme",
+  "password",
+  "passwd",
+  "secret",
+  "apikey",
+  "api_key",
+  "token",
+  "example",
+  "placeholder",
+  "dummy",
+  "test",
+  "testing",
+  "redacted",
+  "sample",
+  "none",
+  "null",
+  "undefined",
+  "nil",
+  "empty",
+  "default",
+  "notset",
+  "not_set",
+  "enter",
+  "insert",
+  "replace",
+  "todo",
+  "fixme",
+  "foo",
+  "bar",
+  "baz",
+  "qux",
+  "admin",
+  "root",
+  "user",
+  "username",
+  "abc123",
+  "123456",
+  "12345678",
+  "string",
+  "value",
+  "mykey",
+  "mysecret",
+  "mypassword",
+  "yourkey",
+  "yoursecret"
+]);
+function isPlaceholder(value) {
+  const v = value.trim();
+  if (v.length === 0) {
+    return true;
+  }
+  if (/^(.)\1+$/.test(v)) {
+    return true;
+  }
+  for (const re of PLACEHOLDER_PATTERNS) {
+    if (re.test(v)) {
+      return true;
+    }
+  }
+  if (PLACEHOLDER_WORDS.has(v.toLowerCase())) {
+    return true;
+  }
+  if (PLACEHOLDER_SUBSTRINGS.test(v)) {
+    return true;
+  }
+  return false;
+}
+
 // src/engine/ruleEngine.ts
 function getCommentMarkers(languageId) {
   switch (languageId) {
@@ -2198,6 +2303,13 @@ function executeRule(rule, context, lineOffsets, commentRanges) {
       }
       continue;
     }
+    if (rule.secretGroup !== void 0) {
+      const candidate = match[rule.secretGroup] ?? "";
+      const tooLowEntropy = rule.minEntropy !== void 0 && shannonEntropy(candidate) < rule.minEntropy;
+      if (isPlaceholder(candidate) || tooLowEntropy) {
+        continue;
+      }
+    }
     const location = {
       filePath: context.filePath,
       startLine: start.line,
@@ -2249,10 +2361,10 @@ var credentialRules = [
   {
     id: "CRED-001",
     title: "AWS Access Key Detected",
-    description: "An AWS Access Key ID was found in the code. Move this to environment variables or a secrets manager.",
+    description: "An AWS Access Key ID (long-term AKIA or temporary session ASIA) was found in the code. Move this to environment variables or a secrets manager.",
     severity: 0 /* Critical */,
     category: "credential" /* Credential */,
-    pattern: /AKIA[0-9A-Z]{16}/g,
+    pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
     cweId: "CWE-798"
   },
   {
@@ -2270,7 +2382,10 @@ var credentialRules = [
     description: "A hardcoded API key was found. Use environment variables or a secrets manager instead.",
     severity: 1 /* High */,
     category: "credential" /* Credential */,
-    pattern: /(?:api[_-]?key|apikey)\s*[:=]\s*['"][A-Za-z0-9]{20,}['"]/gi,
+    // Quotes optional (so .env/shell/YAML match); charset includes - and _.
+    pattern: /(?:api[_-]?key|apikey)["']?\s*[:=]\s*['"]?([A-Za-z0-9_\-]{20,})['"]?/gi,
+    secretGroup: 1,
+    minEntropy: 3,
     cweId: "CWE-798"
   },
   {
@@ -2288,7 +2403,11 @@ var credentialRules = [
     description: "A hardcoded password was found. Use environment variables or a secrets manager.",
     severity: 1 /* High */,
     category: "credential" /* Credential */,
-    pattern: /(?<![A-Za-z0-9_])(?:password|passwd|pwd)\s*[:=]\s*['"](?!(?:true|false|yes|no|none|null|undefined|0|1|\*+|x+|\.+|<[^>]*>|\{[^}]*\})['"])[^'"]{4,}['"]/gi,
+    // Matches DB_PASSWORD=, userPassword:, etc. Quotes optional; placeholder and
+    // low-entropy values are filtered by the engine heuristics.
+    pattern: /(?:password|passwd|pwd)["']?\s*[:=]\s*['"]?([^\s'"]{4,})['"]?/gi,
+    secretGroup: 1,
+    minEntropy: 2.5,
     cweId: "CWE-798"
   },
   {
@@ -2324,7 +2443,10 @@ var credentialRules = [
     description: "A potential secret was found hardcoded in the source. Move to environment variables.",
     severity: 1 /* High */,
     category: "credential" /* Credential */,
-    pattern: /(?:secret|token|auth)\s*[:=]\s*['"][A-Za-z0-9+/=]{20,}['"]/gi,
+    // Quotes optional; covers secret/token/auth and the common *_secret/*_token forms.
+    pattern: /(?:client[_-]?secret|api[_-]?secret|access[_-]?token|refresh[_-]?token|secret|token|auth)["']?\s*[:=]\s*['"]?([A-Za-z0-9_\-+/=.]{16,})['"]?/gi,
+    secretGroup: 1,
+    minEntropy: 3,
     cweId: "CWE-798"
   },
   {
@@ -2361,6 +2483,177 @@ var credentialRules = [
     severity: 2 /* Medium */,
     category: "credential" /* Credential */,
     pattern: /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-014",
+    title: "GitHub Token Detected (server/user/refresh)",
+    description: "A GitHub server (ghs_), user-to-server (ghu_) or refresh (ghr_) token was found. Rotate immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bgh[sur]_[A-Za-z0-9]{36}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-015",
+    title: "GitHub Fine-Grained PAT Detected",
+    description: "A GitHub fine-grained personal access token was found. Rotate immediately and use a secrets manager.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bgithub_pat_[0-9a-zA-Z_]{82}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-016",
+    title: "GitLab Personal Access Token Detected",
+    description: "A GitLab personal access token (glpat-) was found. Rotate immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bglpat-[0-9a-zA-Z_-]{20}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-017",
+    title: "npm Access Token Detected",
+    description: "An npm access token (npm_) was found. Rotate it and use an .npmrc with an environment variable.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bnpm_[0-9a-zA-Z]{36}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-018",
+    title: "PyPI API Token Detected",
+    description: "A PyPI upload token (pypi-) was found. Rotate it on PyPI immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-019",
+    title: "Hugging Face Token Detected",
+    description: "A Hugging Face access token (hf_) was found. Rotate it in your account settings.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /\bhf_[A-Za-z0-9]{34}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-020",
+    title: "OpenAI API Key Detected",
+    description: "An OpenAI API key was found. Rotate it immediately; it grants billable API access.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bsk-(?:proj-[A-Za-z0-9_-]{40,}|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20,})\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-021",
+    title: "Anthropic API Key Detected",
+    description: "An Anthropic API key (sk-ant-) was found. Rotate it immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bsk-ant-[A-Za-z0-9-]{2,}-[A-Za-z0-9_-]{80,}/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-022",
+    title: "Google OAuth Client Secret Detected",
+    description: "A Google OAuth client secret (GOCSPX-) was found. Rotate it in the Google Cloud console.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /\bGOCSPX-[A-Za-z0-9_-]{28}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-023",
+    title: "Slack Incoming Webhook Detected",
+    description: "A Slack incoming webhook URL was found. Anyone with this URL can post to the channel; rotate it.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /https:\/\/hooks\.slack\.com\/services\/T[A-Za-z0-9_]+\/B[A-Za-z0-9_]+\/[A-Za-z0-9_]{20,}/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-024",
+    title: "Stripe Restricted Key Detected",
+    description: "A Stripe restricted API key (rk_live_) was found. Rotate it immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\brk_live_[0-9a-zA-Z]{24,}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-025",
+    title: "Stripe Webhook Secret Detected",
+    description: "A Stripe webhook signing secret (whsec_) was found. Rotate it in the Stripe dashboard.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /\bwhsec_[A-Za-z0-9]{32,}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-026",
+    title: "SendGrid API Key Detected",
+    description: "A SendGrid API key (SG.) was found. Rotate it immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-027",
+    title: "Twilio API Key Detected",
+    description: "A Twilio API key SID (SK...) was found. Rotate it in the Twilio console.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /\bSK[0-9a-fA-F]{32}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-028",
+    title: "Sentry DSN Detected",
+    description: "A Sentry DSN was found. Treat it as a secret if it includes a private key component.",
+    severity: 2 /* Medium */,
+    category: "credential" /* Credential */,
+    pattern: /https:\/\/[0-9a-f]{32}@(?:[a-z0-9.-]+\.)?(?:ingest\.)?sentry\.io\/[0-9]+/gi,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-029",
+    title: "DigitalOcean Token Detected",
+    description: "A DigitalOcean personal access / OAuth token (do?_v1_) was found. Rotate it immediately.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /\bdo[oprv]_v1_[a-f0-9]{64}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-030",
+    title: "Discord Bot Token Detected",
+    description: "A Discord bot token was found. Rotate it in the Discord developer portal.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /\b[MNO][A-Za-z0-9_-]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-031",
+    title: "Telegram Bot Token Detected",
+    description: "A Telegram bot token was found. Rotate it via BotFather.",
+    severity: 1 /* High */,
+    category: "credential" /* Credential */,
+    pattern: /\b\d{8,10}:[A-Za-z0-9_-]{35}\b/g,
+    cweId: "CWE-798"
+  },
+  {
+    id: "CRED-032",
+    title: "Azure Storage Account Key Detected",
+    description: "An Azure Storage account key was found in a connection string. Rotate the key in the Azure portal.",
+    severity: 0 /* Critical */,
+    category: "credential" /* Credential */,
+    pattern: /AccountKey=[A-Za-z0-9+/]{86}==/gi,
     cweId: "CWE-798"
   }
 ];

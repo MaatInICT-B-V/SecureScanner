@@ -99,7 +99,7 @@ export const owaspRules: IScannerRule[] = [
     description: 'yaml.load() without SafeLoader can execute arbitrary code. Use yaml.safe_load() instead.',
     severity: Severity.High,
     category: FindingCategory.OWASP,
-    pattern: /yaml\.load\s*\([^)]*(?!Loader\s*=\s*yaml\.SafeLoader)[^)]*\)/g,
+    pattern: /yaml\.load\s*\((?![^)]*SafeLoader)[^)]*\)/g,
     languages: ['python'],
     cweId: 'CWE-502',
     owaspId: 'A08:2021',

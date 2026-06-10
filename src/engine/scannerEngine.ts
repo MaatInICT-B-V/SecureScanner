@@ -17,6 +17,11 @@ import {
   parseRequirementsTxt,
 } from './dependencyResolver';
 import { osvQueryBatch, osvGetVulns, osvSeverity, osvFixedVersion } from './osvClient';
+import { BaselineManager } from './baselineManager';
+import { computeFingerprint } from '../utils/fingerprint';
+import { matchesAnyGlob } from '../utils/glob';
+
+const WORKSPACE_FILE_CAP = 5000;
 
 export class ScannerEngine {
   private registry: ScannerRegistry;
@@ -30,6 +35,7 @@ export class ScannerEngine {
   // synchronous per-file registry loop. Concurrent triggers share one run.
   private depScanPromise: Promise<Finding[]> | null = null;
   private workspaceScanRunning = false;
+  private baseline = new BaselineManager();
 
   constructor() {
     this.registry = new ScannerRegistry();
@@ -130,12 +136,10 @@ export class ScannerEngine {
       effectiveIgnorePaths.push(`**/${folder}/**`);
     }
 
-    // Check ignore paths
-    for (const pattern of effectiveIgnorePaths) {
-      const globPattern = pattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/\\\\]*');
-      if (new RegExp(globPattern).test(filePath.replace(/\\/g, '/'))) {
-        return [];
-      }
+    // Check ignore paths (anchored glob matching: '*.min.js' no longer also
+    // matches 'admin.json').
+    if (matchesAnyGlob(filePath, effectiveIgnorePaths)) {
+      return [];
     }
 
     // Resolve project type for git-aware scanning
@@ -171,12 +175,13 @@ export class ScannerEngine {
       findings.push(...filtered);
     }
 
-    this.findingsMap.set(filePath, findings);
+    const visible = this.applyBaseline(findings);
+    this.findingsMap.set(filePath, visible);
     this._onFindingsChanged.fire(this.findingsMap);
-    return findings;
+    return visible;
   }
 
-  async scanWorkspace(): Promise<Finding[]> {
+  async scanWorkspace(token?: vscode.CancellationToken): Promise<Finding[]> {
     this.findingsMap.clear();
     const allFindings: Finding[] = [];
     const config = this.getConfig();
@@ -197,13 +202,23 @@ export class ScannerEngine {
     const files = await vscode.workspace.findFiles(
       '**/*',
       ignorePattern,
-      5000 // max files
+      WORKSPACE_FILE_CAP
     );
+
+    // Warn when the file cap is hit so users know results may be incomplete.
+    if (files.length >= WORKSPACE_FILE_CAP) {
+      vscode.window.showWarningMessage(
+        `SecureScanner: workspace has more than ${WORKSPACE_FILE_CAP} files; only the first ${WORKSPACE_FILE_CAP} were scanned. Add folders to "secureScanner.ignorePaths" / "excludeFolders" to narrow the scan.`
+      );
+    }
 
     // Suppress the per-file manifest trigger during the loop; dependencies are
     // scanned once explicitly below.
     this.workspaceScanRunning = true;
     for (const file of files) {
+      if (token?.isCancellationRequested) {
+        break;
+      }
       try {
         const document = await vscode.workspace.openTextDocument(file);
         const findings = this.scanDocument(document);
@@ -227,7 +242,9 @@ export class ScannerEngine {
         for (const folder of workspaceFolders) {
           const isGit = this.resolveIsGitProject(config.projectType, folder.uri.fsPath);
           const hygieneFindings = await this.fileHygieneScanner.scanWorkspace(folder.uri.fsPath, isGit);
-          const filtered = hygieneFindings.filter(f => f.severity <= config.severityThreshold);
+          const filtered = this.applyBaseline(
+            hygieneFindings.filter(f => f.severity <= config.severityThreshold)
+          );
           allFindings.push(...filtered);
 
           // Store workspace-level findings under the workspace root path
@@ -290,7 +307,7 @@ export class ScannerEngine {
       findings = this.scanWithBuiltinRules(manifestFiles);
     }
 
-    findings = findings.filter(f => f.severity <= config.severityThreshold);
+    findings = this.applyBaseline(findings.filter(f => f.severity <= config.severityThreshold));
     this.mergeDependencyFindings(findings);
     this._onFindingsChanged.fire(this.findingsMap);
     return findings;
@@ -485,6 +502,65 @@ export class ScannerEngine {
       case 'low': return Severity.Low;
       default: return Severity.Info;
     }
+  }
+
+  /** True while a workspace scan loop is running (used to gate auto-scan-on-open). */
+  isWorkspaceScanRunning(): boolean {
+    return this.workspaceScanRunning;
+  }
+
+  private primaryWorkspaceRoot(): string | undefined {
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+
+  /** Assign a stable fingerprint to any finding that lacks one. */
+  private ensureFingerprints(findings: Finding[]): void {
+    for (const f of findings) {
+      if (!f.fingerprint) {
+        const snippet = f.matchedText ?? f.title;
+        f.fingerprint = computeFingerprint(f.id, f.location.filePath, snippet);
+      }
+    }
+  }
+
+  /** Drop findings whose fingerprint is in the workspace baseline. */
+  private applyBaseline(findings: Finding[]): Finding[] {
+    const root = this.primaryWorkspaceRoot();
+    if (!root) {
+      return findings;
+    }
+    this.baseline.ensureLoaded(root);
+    this.ensureFingerprints(findings);
+    return findings.filter(f => !(f.fingerprint && this.baseline.has(f.fingerprint)));
+  }
+
+  /**
+   * Add the finding at the given location to the workspace baseline so it is
+   * suppressed in future scans, then refresh all diagnostics. Returns false if
+   * no matching finding or workspace root is available.
+   */
+  addToBaseline(filePath: string, ruleId: string, startLine: number): boolean {
+    const root = this.primaryWorkspaceRoot();
+    if (!root) {
+      return false;
+    }
+    const findings = this.findingsMap.get(filePath) || [];
+    const target = findings.find(f => f.id === ruleId && f.location.startLine === startLine);
+    if (!target) {
+      return false;
+    }
+    this.ensureFingerprints([target]);
+    if (!target.fingerprint) {
+      return false;
+    }
+    this.baseline.add(root, [target.fingerprint]);
+
+    // Re-filter every file against the updated baseline and refresh.
+    for (const [p, fs2] of this.findingsMap) {
+      this.findingsMap.set(p, this.applyBaseline(fs2));
+    }
+    this._onFindingsChanged.fire(this.findingsMap);
+    return true;
   }
 
   getAllFindings(): Map<string, Finding[]> {

@@ -262,10 +262,20 @@ function executeRule(
   const startTime = Date.now();
   const TIMEOUT_MS = 200;
 
+  // NOTE: this guard runs *between* matches, so it bounds rules that produce
+  // many/expensive matches but cannot interrupt a single catastrophically
+  // backtracking exec() — JavaScript regex execution is not preemptible without
+  // a worker/RE2. The real defense is keeping patterns linear (see the rule
+  // tests). When the guard does fire we warn instead of silently dropping the
+  // remaining matches, so the truncated scan is visible rather than a silent
+  // false negative.
   let match: RegExpExecArray | null;
   while ((match = regex.exec(context.content)) !== null) {
-    // Timeout guard against catastrophic backtracking
     if (Date.now() - startTime > TIMEOUT_MS) {
+      console.warn(
+        `SecureScanner: rule ${rule.id} exceeded ${TIMEOUT_MS}ms on ${context.filePath}; ` +
+        'remaining matches in this file were skipped.'
+      );
       break;
     }
 

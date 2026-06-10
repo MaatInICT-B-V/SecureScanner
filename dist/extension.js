@@ -1968,13 +1968,13 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode10 = __toESM(require("vscode"));
-var path5 = __toESM(require("path"));
-var fs4 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
+var fs5 = __toESM(require("fs"));
 
 // src/engine/scannerEngine.ts
 var vscode2 = __toESM(require("vscode"));
-var path2 = __toESM(require("path"));
-var fs2 = __toESM(require("fs"));
+var path3 = __toESM(require("path"));
+var fs3 = __toESM(require("fs"));
 
 // src/types/finding.ts
 var FindingCategory = /* @__PURE__ */ ((FindingCategory3) => {
@@ -2291,6 +2291,9 @@ function executeRule(rule, context, lineOffsets, commentRanges) {
   let match;
   while ((match = regex.exec(context.content)) !== null) {
     if (Date.now() - startTime > TIMEOUT_MS) {
+      console.warn(
+        `SecureScanner: rule ${rule.id} exceeded ${TIMEOUT_MS}ms on ${context.filePath}; remaining matches in this file were skipped.`
+      );
       break;
     }
     const start = offsetToPosition(match.index, lineOffsets);
@@ -2699,7 +2702,9 @@ var owaspRules = [
     description: "eval() executes arbitrary code and is a major security risk. Avoid eval entirely.",
     severity: 0 /* Critical */,
     category: "owasp" /* OWASP */,
-    pattern: /\beval\s*\(/g,
+    // Exclude method calls like model.eval()/df.eval() (PyTorch/pandas) and
+    // identifiers ending in eval (e.g. ast.literal_eval handled by the \w guard).
+    pattern: /(?<![.\w])eval\s*\(/g,
     languages: ["javascript", "typescript", "python"],
     cweId: "CWE-95",
     owaspId: "A03:2021"
@@ -2779,7 +2784,10 @@ var owaspRules = [
     description: "MD5 is cryptographically broken. Use SHA-256 or stronger algorithms.",
     severity: 1 /* High */,
     category: "owasp" /* OWASP */,
-    pattern: /(?:createHash|hashlib\.md5|MD5|MessageDigest\.getInstance)\s*\(\s*['"]?md5['"]?\s*\)/gi,
+    // Two shapes: the algorithm is in the function name (hashlib.md5(...),
+    // CryptoJS.MD5(...)) or in the argument (createHash('md5'),
+    // MessageDigest.getInstance("MD5")).
+    pattern: /(?:hashlib\.md5|CryptoJS\.MD5)\s*\(|(?:createHash|MessageDigest\.getInstance)\s*\(\s*['"]md5['"]/gi,
     cweId: "CWE-327",
     owaspId: "A02:2021"
   },
@@ -2789,7 +2797,7 @@ var owaspRules = [
     description: "SHA-1 is deprecated for security use. Use SHA-256 or stronger.",
     severity: 2 /* Medium */,
     category: "owasp" /* OWASP */,
-    pattern: /(?:createHash|hashlib\.sha1|MessageDigest\.getInstance)\s*\(\s*['"]?sha1['"]?\s*\)/gi,
+    pattern: /(?:hashlib\.sha1|CryptoJS\.SHA1)\s*\(|(?:createHash|MessageDigest\.getInstance)\s*\(\s*['"]sha-?1['"]/gi,
     cweId: "CWE-327",
     owaspId: "A02:2021"
   },
@@ -2837,6 +2845,322 @@ var owaspRules = [
     languages: ["javascript", "typescript"],
     cweId: "CWE-22",
     owaspId: "A01:2021"
+  },
+  {
+    id: "OWASP-016",
+    title: "SQL Injection via f-string",
+    description: "A SQL statement is built with a Python f-string. Use parameterized queries (e.g. cursor.execute(sql, params)).",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:execute|executemany|query|raw)\s*\(\s*f['"](?:SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER)\b[^'"]*\{/gi,
+    languages: ["python"],
+    cweId: "CWE-89",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-017",
+    title: "SQL Injection via string formatting",
+    description: "A SQL string is interpolated with .format() or the % operator. Use parameterized queries instead.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /['"](?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^'"]*['"]\s*(?:\.format\s*\(|%\s*[\w([])/gi,
+    cweId: "CWE-89",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-018",
+    title: "SQL query built by concatenation",
+    description: "A SQL statement is assigned to a variable and built with concatenation. Use parameterized queries.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /\b\w*(?:sql|query|stmt)\w*\s*=\s*['"](?:SELECT|INSERT|UPDATE|DELETE|DROP)\b[^'"]*['"]\s*\+/gi,
+    cweId: "CWE-89",
+    owaspId: "A03:2021"
+  },
+  // A10:2021 - Server-Side Request Forgery (SSRF)
+  {
+    id: "OWASP-019",
+    title: "Potential SSRF (Server-Side Request Forgery)",
+    description: "An HTTP request is made to a URL derived from user input. Validate and allowlist outbound URLs.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:axios|fetch|got|superagent|needle)\s*(?:\.\s*(?:get|post|put|delete|patch|request|head))?\s*\(\s*[^)]{0,80}(?:req\.|request\.|params\.|query\.|body\.)/g,
+    languages: ["javascript", "typescript"],
+    cweId: "CWE-918",
+    owaspId: "A10:2021"
+  },
+  {
+    id: "OWASP-020",
+    title: "Potential SSRF (Server-Side Request Forgery)",
+    description: "An HTTP request is made to a URL derived from request data. Validate and allowlist outbound URLs.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:requests\.(?:get|post|put|delete|patch|head|request)|urlopen|urllib\.request\.urlopen)\s*\(\s*[^)]{0,80}(?:request\.(?:args|form|values|json|GET|POST)|input\()/g,
+    languages: ["python"],
+    cweId: "CWE-918",
+    owaspId: "A10:2021"
+  },
+  // A05:2021 - XML External Entity (XXE)
+  {
+    id: "OWASP-021",
+    title: "Potential XXE in XML Parsing",
+    description: "XML is parsed without disabling external entities. Use defusedxml or disable entity resolution.",
+    severity: 2 /* Medium */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:lxml\.etree|etree)\.(?:parse|fromstring)\s*\(|xml\.sax\.make_parser\s*\(|minidom\.parse(?:String)?\s*\(/g,
+    languages: ["python"],
+    cweId: "CWE-611",
+    owaspId: "A05:2021"
+  },
+  {
+    id: "OWASP-022",
+    title: "Potential XXE in XML Parsing",
+    description: "XML factory created without disabling external entities. Set features to disallow DOCTYPE/external entities.",
+    severity: 2 /* Medium */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:DocumentBuilderFactory|SAXParserFactory|XMLInputFactory|TransformerFactory)\.newInstance\s*\(/g,
+    languages: ["java"],
+    cweId: "CWE-611",
+    owaspId: "A05:2021"
+  },
+  {
+    id: "OWASP-023",
+    title: "Potential XXE in XML Parsing",
+    description: "XmlDocument/XmlTextReader with default settings may resolve external entities. Set XmlResolver to null.",
+    severity: 2 /* Medium */,
+    category: "owasp" /* OWASP */,
+    pattern: /new\s+Xml(?:Document|TextReader)\s*\(/g,
+    languages: ["csharp"],
+    cweId: "CWE-611",
+    owaspId: "A05:2021"
+  },
+  // A05:2021 - Insecure cookies
+  {
+    id: "OWASP-024",
+    title: "Insecure Cookie Configuration",
+    description: "A cookie is set with httpOnly or secure disabled, exposing it to theft. Enable both flags.",
+    severity: 2 /* Medium */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:httpOnly|secure)\s*[:=]\s*false\b/gi,
+    cweId: "CWE-614",
+    owaspId: "A05:2021"
+  },
+  // A01:2021 - Open redirect
+  {
+    id: "OWASP-025",
+    title: "Potential Open Redirect",
+    description: "A redirect target is derived from user input. Validate against an allowlist of destinations.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:res|response)\.redirect\s*\(\s*[^)]{0,60}(?:req\.|request\.|params\.|query\.|body\.)/g,
+    languages: ["javascript", "typescript"],
+    cweId: "CWE-601",
+    owaspId: "A01:2021"
+  },
+  {
+    id: "OWASP-026",
+    title: "Potential Open Redirect",
+    description: "A redirect target is derived from request data. Validate against an allowlist of destinations.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:redirect|HttpResponseRedirect)\s*\(\s*[^)]{0,60}request\.(?:args|GET|POST|values|form)/g,
+    languages: ["python"],
+    cweId: "CWE-601",
+    owaspId: "A01:2021"
+  },
+  // A07:2021 - Identification and Authentication Failures
+  {
+    id: "OWASP-027",
+    title: 'JWT Signature Algorithm "none"',
+    description: 'A JWT is configured with algorithm "none", disabling signature verification. Use a strong algorithm.',
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:algorithm|alg)\s*[:=]\s*['"]?none['"]?/gi,
+    cweId: "CWE-347",
+    owaspId: "A07:2021"
+  },
+  {
+    id: "OWASP-028",
+    title: "JWT Signature Verification Disabled",
+    description: "A JWT is decoded with signature verification disabled. Always verify the signature.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /jwt\.decode\s*\([^)]{0,120}(?:verify\s*=\s*False|['"]verify_signature['"]\s*:\s*False)/gi,
+    languages: ["python"],
+    cweId: "CWE-347",
+    owaspId: "A07:2021"
+  },
+  // A02:2021 - TLS verification disabled
+  {
+    id: "OWASP-029",
+    title: "TLS Certificate Verification Disabled",
+    description: "TLS certificate verification is disabled (rejectUnauthorized: false), enabling man-in-the-middle attacks.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /rejectUnauthorized\s*:\s*false/gi,
+    languages: ["javascript", "typescript"],
+    cweId: "CWE-295",
+    owaspId: "A02:2021"
+  },
+  {
+    id: "OWASP-030",
+    title: "TLS Certificate Verification Disabled",
+    description: "TLS verification is disabled (InsecureSkipVerify: true), enabling man-in-the-middle attacks.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /InsecureSkipVerify\s*:\s*true/g,
+    languages: ["go"],
+    cweId: "CWE-295",
+    owaspId: "A02:2021"
+  },
+  {
+    id: "OWASP-031",
+    title: "TLS Certificate Verification Disabled",
+    description: "cURL peer verification is disabled (CURLOPT_SSL_VERIFYPEER false/0), enabling man-in-the-middle attacks.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /CURLOPT_SSL_VERIFYPEER\s*,\s*(?:false|0)\b/gi,
+    languages: ["php"],
+    cweId: "CWE-295",
+    owaspId: "A02:2021"
+  },
+  // A09:2021 - Security Logging Failures (logging sensitive data)
+  {
+    id: "OWASP-032",
+    title: "Sensitive Data in Logs",
+    description: "A secret-like value is written to logs. Avoid logging passwords, tokens or keys.",
+    severity: 2 /* Medium */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:console\.(?:log|info|debug|warn|error)|(?:logger|logging)\.(?:info|debug|warning|warn|error)|\bprint|\bprintln|System\.out\.print(?:ln)?|fmt\.Print(?:ln|f)?)\s*\(\s*[^)]{0,80}(?:password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret|credit[_-]?card)/gi,
+    cweId: "CWE-532",
+    owaspId: "A09:2021"
+  },
+  // A08:2021 - Insecure Deserialization (non-Python)
+  {
+    id: "OWASP-033",
+    title: "Insecure Deserialization (Java)",
+    description: "ObjectInputStream.readObject() can execute arbitrary code on untrusted input. Avoid native serialization.",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    pattern: /new\s+ObjectInputStream\b|\.readObject\s*\(\s*\)/g,
+    languages: ["java"],
+    cweId: "CWE-502",
+    owaspId: "A08:2021"
+  },
+  {
+    id: "OWASP-034",
+    title: "Insecure Deserialization (PHP)",
+    description: "unserialize() on untrusted input can lead to object injection. Use json_decode for data.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /\bunserialize\s*\(/g,
+    languages: ["php"],
+    cweId: "CWE-502",
+    owaspId: "A08:2021"
+  },
+  {
+    id: "OWASP-035",
+    title: "Insecure Deserialization (Ruby)",
+    description: "Marshal.load / YAML.load on untrusted input can execute arbitrary code. Use YAML.safe_load / JSON.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:Marshal\.load|YAML\.load|Oj\.load)\s*\(/g,
+    languages: ["ruby"],
+    cweId: "CWE-502",
+    owaspId: "A08:2021"
+  },
+  {
+    id: "OWASP-036",
+    title: "Insecure Deserialization (.NET)",
+    description: "BinaryFormatter and similar serializers are unsafe on untrusted input. Use a safe serializer.",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    pattern: /\b(?:BinaryFormatter|NetDataContractSerializer|LosFormatter|SoapFormatter)\b/g,
+    languages: ["csharp"],
+    cweId: "CWE-502",
+    owaspId: "A08:2021"
+  },
+  // A03:2021 - Command injection (additional languages)
+  {
+    id: "OWASP-037",
+    title: "Potential Command Injection (PHP)",
+    description: "A shell command includes a PHP variable. Use escapeshellarg() or avoid shell execution.",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:system|exec|shell_exec|passthru|popen|proc_open)\s*\(\s*[^)]{0,80}\$/g,
+    languages: ["php"],
+    cweId: "CWE-78",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-038",
+    title: "Potential Command Injection (Ruby)",
+    description: "A shell command interpolates a variable. Use a parameterized form of system/exec.",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:system|exec|spawn)\s*\(?\s*["'][^"'\n]{0,80}#\{|`[^`\n]{0,80}#\{/g,
+    languages: ["ruby"],
+    cweId: "CWE-78",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-039",
+    title: "Potential Command Injection (Go)",
+    description: "exec.Command builds an argument via concatenation. Pass arguments separately, never via a shell string.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /exec\.Command\s*\(\s*[^)]{0,80}\+/g,
+    languages: ["go"],
+    cweId: "CWE-78",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-040",
+    title: "Potential Command Injection (.NET)",
+    description: "Process.Start builds a command via concatenation. Validate input and avoid shell interpretation.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /Process\.Start\s*\(\s*[^)]{0,80}\+/g,
+    languages: ["csharp"],
+    cweId: "CWE-78",
+    owaspId: "A03:2021"
+  },
+  // A03:2021 - SQL injection (additional languages)
+  {
+    id: "OWASP-041",
+    title: "Potential SQL Injection (.NET)",
+    description: "A SQL command is built with concatenation or string interpolation. Use parameterized queries.",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    pattern: /(?:SqlCommand|OleDbCommand|MySqlCommand|ExecuteReader|ExecuteNonQuery|ExecuteScalar)\s*\(\s*(?:[@$]?"[^"]{0,120}"\s*\+|\$"[^"]{0,120}\{)/g,
+    languages: ["csharp"],
+    cweId: "CWE-89",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-042",
+    title: "Potential SQL Injection (PHP)",
+    description: "A SQL query includes a PHP variable directly. Use prepared statements with bound parameters.",
+    severity: 0 /* Critical */,
+    category: "owasp" /* OWASP */,
+    // Require the variable to appear inside the SQL string (double-quote
+    // interpolation) or a concatenation, so the mysqli connection arg ($conn)
+    // does not trigger a false positive.
+    pattern: /(?:mysqli_query|mysql_query|pg_query|->query|->exec)\s*\([^;)]{0,160}(?:"[^"]{0,140}\$|\.\s*\$)/g,
+    languages: ["php"],
+    cweId: "CWE-89",
+    owaspId: "A03:2021"
+  },
+  {
+    id: "OWASP-043",
+    title: "Potential SQL Injection (Go)",
+    description: "A SQL query is built with fmt.Sprintf or concatenation. Use placeholders and pass args separately.",
+    severity: 1 /* High */,
+    category: "owasp" /* OWASP */,
+    pattern: /\.(?:Query|QueryRow|Exec)\s*\(\s*(?:fmt\.Sprintf|[^),]{0,120}\+)/g,
+    languages: ["go"],
+    cweId: "CWE-89",
+    owaspId: "A03:2021"
   }
 ];
 
@@ -3816,7 +4140,7 @@ var https = __toESM(require("https"));
 var OSV_HOST = "api.osv.dev";
 var BATCH_LIMIT = 1e3;
 var DETAIL_CONCURRENCY = 8;
-function request2(method, path6, body) {
+function request2(method, path7, body) {
   return new Promise((resolve, reject) => {
     const headers = { "Content-Type": "application/json" };
     if (body !== void 0) {
@@ -3824,7 +4148,7 @@ function request2(method, path6, body) {
     }
     const options = {
       hostname: OSV_HOST,
-      path: path6,
+      path: path7,
       method,
       headers
     };
@@ -3949,7 +4273,112 @@ function osvFixedVersion(vuln, name, ecosystem) {
   return "";
 }
 
+// src/engine/baselineManager.ts
+var fs2 = __toESM(require("fs"));
+var path2 = __toESM(require("path"));
+var BASELINE_FILENAME = ".securescanner-baseline.json";
+var BaselineManager = class {
+  constructor() {
+    this.fingerprints = /* @__PURE__ */ new Set();
+    this.loadedRoot = null;
+  }
+  baselinePath(root) {
+    return path2.join(root, BASELINE_FILENAME);
+  }
+  /** Load the baseline for a workspace root if not already loaded for it. */
+  ensureLoaded(root) {
+    if (this.loadedRoot === root) {
+      return;
+    }
+    this.load(root);
+  }
+  load(root) {
+    this.loadedRoot = root;
+    this.fingerprints.clear();
+    try {
+      const raw = fs2.readFileSync(this.baselinePath(root), "utf8");
+      const parsed = JSON.parse(raw);
+      const list = Array.isArray(parsed) ? parsed : parsed.fingerprints;
+      if (Array.isArray(list)) {
+        for (const fp of list) {
+          if (typeof fp === "string") {
+            this.fingerprints.add(fp);
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  has(fingerprint) {
+    return this.fingerprints.has(fingerprint);
+  }
+  /** Add fingerprints to the baseline for a root and persist the file. */
+  add(root, fingerprintsToAdd) {
+    this.ensureLoaded(root);
+    for (const fp of fingerprintsToAdd) {
+      this.fingerprints.add(fp);
+    }
+    this.save(root);
+  }
+  save(root) {
+    const body = { fingerprints: [...this.fingerprints].sort() };
+    fs2.writeFileSync(this.baselinePath(root), JSON.stringify(body, null, 2), "utf8");
+  }
+};
+
+// src/utils/fingerprint.ts
+function fnv1a(input) {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = hash + ((hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24)) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+function basename(filePath) {
+  return filePath.split(/[/\\]/).pop() || filePath;
+}
+function computeFingerprint(ruleId, filePath, snippet) {
+  return fnv1a(`${ruleId}|${basename(filePath)}|${snippet}`);
+}
+
+// src/utils/glob.ts
+function globToRegExp(glob) {
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += ".*";
+        i++;
+        if (glob[i + 1] === "/") {
+          i++;
+          re += "(?:/)?";
+        }
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if ("\\^$.|+()[]{}".includes(c)) {
+      re += "\\" + c;
+    } else {
+      re += c;
+    }
+  }
+  return new RegExp("^" + re + "$");
+}
+function matchesGlob(filePath, glob) {
+  const normalized = filePath.replace(/\\/g, "/");
+  const target = glob.includes("/") ? normalized : normalized.split("/").pop() || normalized;
+  return globToRegExp(glob).test(target);
+}
+function matchesAnyGlob(filePath, globs) {
+  return globs.some((g) => matchesGlob(filePath, g));
+}
+
 // src/engine/scannerEngine.ts
+var WORKSPACE_FILE_CAP = 5e3;
 var ScannerEngine = class {
   constructor() {
     this._onFindingsChanged = new vscode2.EventEmitter();
@@ -3959,6 +4388,7 @@ var ScannerEngine = class {
     // synchronous per-file registry loop. Concurrent triggers share one run.
     this.depScanPromise = null;
     this.workspaceScanRunning = false;
+    this.baseline = new BaselineManager();
     this.registry = new ScannerRegistry();
     this.registry.register(new CredentialScanner());
     this.registry.register(new OwaspScanner());
@@ -3969,7 +4399,7 @@ var ScannerEngine = class {
   }
   loadExternalVulnDb(vulnDbPath) {
     try {
-      const data = fs2.readFileSync(vulnDbPath, "utf8");
+      const data = fs3.readFileSync(vulnDbPath, "utf8");
       const db = JSON.parse(data);
       const npm = Array.isArray(db.npmVulnerabilities) ? db.npmVulnerabilities : null;
       const pip = Array.isArray(db.pipVulnerabilities) ? db.pipVulnerabilities : null;
@@ -4035,11 +4465,8 @@ var ScannerEngine = class {
     for (const folder of excludeFolders) {
       effectiveIgnorePaths.push(`**/${folder}/**`);
     }
-    for (const pattern of effectiveIgnorePaths) {
-      const globPattern = pattern.replace(/\*\*/g, ".*").replace(/\*/g, "[^/\\\\]*");
-      if (new RegExp(globPattern).test(filePath.replace(/\\/g, "/"))) {
-        return [];
-      }
+    if (matchesAnyGlob(filePath, effectiveIgnorePaths)) {
+      return [];
     }
     const workspaceFolder = vscode2.workspace.getWorkspaceFolder(document.uri);
     const workspaceRoot = workspaceFolder?.uri.fsPath || "";
@@ -4066,11 +4493,12 @@ var ScannerEngine = class {
       });
       findings.push(...filtered);
     }
-    this.findingsMap.set(filePath, findings);
+    const visible = this.applyBaseline(findings);
+    this.findingsMap.set(filePath, visible);
     this._onFindingsChanged.fire(this.findingsMap);
-    return findings;
+    return visible;
   }
-  async scanWorkspace() {
+  async scanWorkspace(token) {
     this.findingsMap.clear();
     const allFindings = [];
     const config = this.getConfig();
@@ -4083,11 +4511,18 @@ var ScannerEngine = class {
     const files = await vscode2.workspace.findFiles(
       "**/*",
       ignorePattern,
-      5e3
-      // max files
+      WORKSPACE_FILE_CAP
     );
+    if (files.length >= WORKSPACE_FILE_CAP) {
+      vscode2.window.showWarningMessage(
+        `SecureScanner: workspace has more than ${WORKSPACE_FILE_CAP} files; only the first ${WORKSPACE_FILE_CAP} were scanned. Add folders to "secureScanner.ignorePaths" / "excludeFolders" to narrow the scan.`
+      );
+    }
     this.workspaceScanRunning = true;
     for (const file of files) {
+      if (token?.isCancellationRequested) {
+        break;
+      }
       try {
         const document = await vscode2.workspace.openTextDocument(file);
         const findings = this.scanDocument(document);
@@ -4106,7 +4541,9 @@ var ScannerEngine = class {
         for (const folder of workspaceFolders) {
           const isGit = this.resolveIsGitProject(config.projectType, folder.uri.fsPath);
           const hygieneFindings = await this.fileHygieneScanner.scanWorkspace(folder.uri.fsPath, isGit);
-          const filtered = hygieneFindings.filter((f) => f.severity <= config.severityThreshold);
+          const filtered = this.applyBaseline(
+            hygieneFindings.filter((f) => f.severity <= config.severityThreshold)
+          );
           allFindings.push(...filtered);
           this.findingsMap.set(folder.uri.fsPath, filtered);
         }
@@ -4116,7 +4553,7 @@ var ScannerEngine = class {
     return allFindings;
   }
   isManifestFile(filePath) {
-    const name = path2.basename(filePath);
+    const name = path3.basename(filePath);
     return name === "package.json" || name === "package-lock.json" || name === "requirements.txt";
   }
   /**
@@ -4157,7 +4594,7 @@ var ScannerEngine = class {
     } else {
       findings = this.scanWithBuiltinRules(manifestFiles);
     }
-    findings = findings.filter((f) => f.severity <= config.severityThreshold);
+    findings = this.applyBaseline(findings.filter((f) => f.severity <= config.severityThreshold));
     this.mergeDependencyFindings(findings);
     this._onFindingsChanged.fire(this.findingsMap);
     return findings;
@@ -4180,8 +4617,8 @@ var ScannerEngine = class {
     const out = [];
     for (const file of files) {
       try {
-        const content = fs2.readFileSync(file.fsPath, "utf8");
-        out.push({ path: file.fsPath, content, fileName: path2.basename(file.fsPath) });
+        const content = fs3.readFileSync(file.fsPath, "utf8");
+        out.push({ path: file.fsPath, content, fileName: path3.basename(file.fsPath) });
       } catch {
       }
     }
@@ -4192,7 +4629,7 @@ var ScannerEngine = class {
     const reqFiles = [];
     const manifestFiles = [];
     for (const m of manifests) {
-      const dir = path2.dirname(m.path);
+      const dir = path3.dirname(m.path);
       if (m.fileName === "package.json") {
         const entry = byDir.get(dir) || {};
         entry.pkg = m;
@@ -4322,6 +4759,58 @@ var ScannerEngine = class {
         return 4 /* Info */;
     }
   }
+  /** True while a workspace scan loop is running (used to gate auto-scan-on-open). */
+  isWorkspaceScanRunning() {
+    return this.workspaceScanRunning;
+  }
+  primaryWorkspaceRoot() {
+    return vscode2.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  }
+  /** Assign a stable fingerprint to any finding that lacks one. */
+  ensureFingerprints(findings) {
+    for (const f of findings) {
+      if (!f.fingerprint) {
+        const snippet = f.matchedText ?? f.title;
+        f.fingerprint = computeFingerprint(f.id, f.location.filePath, snippet);
+      }
+    }
+  }
+  /** Drop findings whose fingerprint is in the workspace baseline. */
+  applyBaseline(findings) {
+    const root = this.primaryWorkspaceRoot();
+    if (!root) {
+      return findings;
+    }
+    this.baseline.ensureLoaded(root);
+    this.ensureFingerprints(findings);
+    return findings.filter((f) => !(f.fingerprint && this.baseline.has(f.fingerprint)));
+  }
+  /**
+   * Add the finding at the given location to the workspace baseline so it is
+   * suppressed in future scans, then refresh all diagnostics. Returns false if
+   * no matching finding or workspace root is available.
+   */
+  addToBaseline(filePath, ruleId, startLine) {
+    const root = this.primaryWorkspaceRoot();
+    if (!root) {
+      return false;
+    }
+    const findings = this.findingsMap.get(filePath) || [];
+    const target = findings.find((f) => f.id === ruleId && f.location.startLine === startLine);
+    if (!target) {
+      return false;
+    }
+    this.ensureFingerprints([target]);
+    if (!target.fingerprint) {
+      return false;
+    }
+    this.baseline.add(root, [target.fingerprint]);
+    for (const [p, fs22] of this.findingsMap) {
+      this.findingsMap.set(p, this.applyBaseline(fs22));
+    }
+    this._onFindingsChanged.fire(this.findingsMap);
+    return true;
+  }
   getAllFindings() {
     return new Map(this.findingsMap);
   }
@@ -4340,7 +4829,7 @@ var ScannerEngine = class {
     if (projectType === "local") {
       return false;
     }
-    return fs2.existsSync(path2.join(workspaceRoot, ".git"));
+    return fs3.existsSync(path3.join(workspaceRoot, ".git"));
   }
   dispose() {
     this._onFindingsChanged.dispose();
@@ -4446,7 +4935,7 @@ var DiagnosticsProvider = class {
 
 // src/providers/treeViewProvider.ts
 var vscode5 = __toESM(require("vscode"));
-var path3 = __toESM(require("path"));
+var path4 = __toESM(require("path"));
 var CategoryNode = class extends vscode5.TreeItem {
   constructor(category, count) {
     super(
@@ -4466,7 +4955,7 @@ var FindingNode = class extends vscode5.TreeItem {
       vscode5.TreeItemCollapsibleState.None
     );
     this.finding = finding;
-    this.description = `${path3.basename(finding.location.filePath)}:${finding.location.startLine + 1}`;
+    this.description = `${path4.basename(finding.location.filePath)}:${finding.location.startLine + 1}`;
     this.tooltip = finding.description;
     this.contextValue = "finding";
     this.command = {
@@ -4611,6 +5100,16 @@ var SecurityCodeActionProvider = class {
         arguments: [document, diagnostic]
       };
       actions.push(suppressAction);
+      const baselineAction = new vscode6.CodeAction(
+        `Add ${codeStr} to baseline (ignore permanently)`,
+        vscode6.CodeActionKind.QuickFix
+      );
+      baselineAction.command = {
+        command: "secureScanner.addToBaseline",
+        title: "Add to baseline",
+        arguments: [document, diagnostic]
+      };
+      actions.push(baselineAction);
       if (codeStr.startsWith("CRED")) {
         const envAction = new vscode6.CodeAction(
           "Move to environment variable",
@@ -4667,7 +5166,7 @@ var SecurityHoverProvider = class {
       );
       if (range.contains(position)) {
         const md = new vscode7.MarkdownString();
-        md.isTrusted = true;
+        md.supportThemeIcons = true;
         md.appendMarkdown(`### $(shield) SecureScanner: ${finding.title}
 
 `);
@@ -4702,8 +5201,8 @@ var SecurityHoverProvider = class {
 
 // src/webview/dashboardPanel.ts
 var vscode9 = __toESM(require("vscode"));
-var path4 = __toESM(require("path"));
-var fs3 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
 
 // src/engine/vulnDbUpdater.ts
 var https2 = __toESM(require("https"));
@@ -5249,10 +5748,10 @@ var DashboardPanel = class _DashboardPanel {
       {
         location: vscode9.ProgressLocation.Notification,
         title: "SecureScanner: Scanning workspace...",
-        cancellable: false
+        cancellable: true
       },
-      async () => {
-        const findings = await this.engine.scanWorkspace();
+      async (_progress, token) => {
+        const findings = await this.engine.scanWorkspace(token);
         this.panel.webview.postMessage({ type: "scanStatus", status: "done", count: findings.length });
         this.refresh();
       }
@@ -5279,17 +5778,17 @@ var DashboardPanel = class _DashboardPanel {
         return;
       }
       const globalStoragePath = this.globalStorageUri.fsPath;
-      const vulnDbPath = path4.join(globalStoragePath, "vulnDb.json");
+      const vulnDbPath = path5.join(globalStoragePath, "vulnDb.json");
       const vulnDbData = {
         updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
         npmVulnerabilities: result.npm,
         pipVulnerabilities: result.pip
       };
       try {
-        fs3.mkdirSync(globalStoragePath, { recursive: true });
+        fs4.mkdirSync(globalStoragePath, { recursive: true });
       } catch {
       }
-      fs3.writeFileSync(vulnDbPath, JSON.stringify(vulnDbData, null, 2), "utf8");
+      fs4.writeFileSync(vulnDbPath, JSON.stringify(vulnDbData, null, 2), "utf8");
       this.engine.loadExternalVulnDb(vulnDbPath);
       this.panel.webview.postMessage({
         type: "vulnDbStatus",
@@ -5864,6 +6363,15 @@ var DashboardPanel = class _DashboardPanel {
     const severityNames = ['Critical', 'High', 'Medium', 'Low', 'Info'];
     const severityClasses = ['critical', 'high', 'medium', 'low', 'info'];
 
+    function esc(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function renderSummary(findings) {
       const cards = document.getElementById('summaryCards');
       const counts = [0, 0, 0, 0, 0];
@@ -5892,10 +6400,10 @@ var DashboardPanel = class _DashboardPanel {
         const fileName = f.location.filePath.split(/[\\/\\\\]/).pop();
         html += '<tr class="clickable" data-index="' + idx + '">';
         html += '<td><span class="severity-badge ' + severityClasses[f.severity] + '">' + severityNames[f.severity] + '</span></td>';
-        html += '<td>' + f.id + '</td>';
-        html += '<td>' + f.title + '</td>';
-        html += '<td>' + f.category + '</td>';
-        html += '<td>' + fileName + '</td>';
+        html += '<td>' + esc(f.id) + '</td>';
+        html += '<td>' + esc(f.title) + '</td>';
+        html += '<td>' + esc(f.category) + '</td>';
+        html += '<td>' + esc(fileName) + '</td>';
         html += '<td>' + (f.location.startLine + 1) + '</td>';
         html += '</tr>';
       });
@@ -6010,17 +6518,17 @@ var DashboardPanel = class _DashboardPanel {
             statusText.textContent = 'All up to date!';
             statusText.style.color = '#4caf50';
           } else {
-            let html = '<div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 8px;">Source: ' + (message.indexUrl || 'PyPI') + '</div>';
+            let html = '<div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 8px;">Source: ' + esc(message.indexUrl || 'PyPI') + '</div>';
             html += '<table><thead><tr>';
             html += '<th>Package</th><th>Current Version</th><th>Latest Version</th><th>Source</th><th>Action</th>';
             html += '</tr></thead><tbody>';
             packages.forEach(function(pkg) {
               html += '<tr>';
-              html += '<td><strong>' + pkg.name + '</strong></td>';
-              html += '<td><span class="severity-badge medium">' + pkg.currentVersion + '</span></td>';
-              html += '<td><span class="severity-badge info" style="background: #4caf50; color: white;">' + pkg.latestVersion + '</span></td>';
+              html += '<td><strong>' + esc(pkg.name) + '</strong></td>';
+              html += '<td><span class="severity-badge medium">' + esc(pkg.currentVersion) + '</span></td>';
+              html += '<td><span class="severity-badge info" style="background: #4caf50; color: white;">' + esc(pkg.latestVersion) + '</span></td>';
               html += '<td style="opacity: 0.7; font-size: 0.9em;">' + (pkg.source === 'installed' ? '&#128187; pip list' : '&#128196; requirements.txt') + '</td>';
-              html += '<td><button class="pkg-update-btn" data-pkg="' + pkg.name + '">&#11014; Update</button></td>';
+              html += '<td><button class="pkg-update-btn" data-pkg="' + esc(pkg.name) + '">&#11014; Update</button></td>';
               html += '</tr>';
             });
             html += '</tbody></table>';
@@ -6121,8 +6629,8 @@ var engine;
 function activate(context) {
   engine = new ScannerEngine();
   const globalStoragePath = context.globalStorageUri.fsPath;
-  const vulnDbPath = path5.join(globalStoragePath, "vulnDb.json");
-  if (fs4.existsSync(vulnDbPath)) {
+  const vulnDbPath = path6.join(globalStoragePath, "vulnDb.json");
+  if (fs5.existsSync(vulnDbPath)) {
     engine.loadExternalVulnDb(vulnDbPath);
   }
   const diagnosticsProvider = new DiagnosticsProvider(engine);
@@ -6160,6 +6668,9 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode10.workspace.onDidOpenTextDocument((document) => {
+      if (engine.isWorkspaceScanRunning()) {
+        return;
+      }
       const config = vscode10.workspace.getConfiguration("secureScanner");
       if (config.get("enableOnOpen", true)) {
         debouncedScan(document);
@@ -6168,7 +6679,7 @@ function activate(context) {
   );
   context.subscriptions.push(
     vscode10.window.onDidChangeActiveTextEditor((editor) => {
-      if (editor) {
+      if (editor && !engine.isWorkspaceScanRunning()) {
         const config = vscode10.workspace.getConfiguration("secureScanner");
         if (config.get("enableOnOpen", true)) {
           debouncedScan(editor.document);
@@ -6195,13 +6706,17 @@ function activate(context) {
         {
           location: vscode10.ProgressLocation.Notification,
           title: "SecureScanner: Scanning workspace...",
-          cancellable: false
+          cancellable: true
         },
-        async () => {
-          const findings = await engine.scanWorkspace();
-          vscode10.window.showInformationMessage(
-            `SecureScanner: Workspace scan complete. Found ${findings.length} issue(s).`
-          );
+        async (_progress, token) => {
+          const findings = await engine.scanWorkspace(token);
+          if (token.isCancellationRequested) {
+            vscode10.window.showInformationMessage("SecureScanner: Workspace scan cancelled.");
+          } else {
+            vscode10.window.showInformationMessage(
+              `SecureScanner: Workspace scan complete. Found ${findings.length} issue(s).`
+            );
+          }
         }
       );
     })
@@ -6231,6 +6746,20 @@ function activate(context) {
         ` ${marker} securescanner-ignore ${ruleId}`
       );
       vscode10.workspace.applyEdit(edit);
+    })
+  );
+  context.subscriptions.push(
+    vscode10.commands.registerCommand("secureScanner.addToBaseline", (document, diagnostic) => {
+      const rawCode = typeof diagnostic.code === "object" ? diagnostic.code.value : diagnostic.code;
+      const ruleId = String(rawCode ?? "").split(/\s+/)[0];
+      const ok = engine.addToBaseline(document.uri.fsPath, ruleId, diagnostic.range.start.line);
+      if (ok) {
+        vscode10.window.showInformationMessage(
+          `SecureScanner: ${ruleId} added to baseline (.securescanner-baseline.json). It will be suppressed in future scans.`
+        );
+      } else {
+        vscode10.window.showWarningMessage("SecureScanner: Could not add finding to baseline (no workspace folder open?).");
+      }
     })
   );
   context.subscriptions.push(

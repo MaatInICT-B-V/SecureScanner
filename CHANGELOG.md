@@ -2,6 +2,33 @@
 
 All notable changes to SecureScanner will be documented in this file.
 
+## [1.2.0] - 2026-06-10
+
+A major accuracy and coverage release. Dependency scanning is rebuilt on OSV's
+batch API over your real dependencies, secret detection is modernized, OWASP
+coverage is broadened across more languages, and several engine bugs are fixed.
+
+### Added
+- **Dependency scanning over real workspace dependencies** — Instead of checking a fixed list of "popular" packages, SecureScanner now reads your actual manifests and lockfiles (`package.json`, `package-lock.json`, `requirements.txt`) and queries OSV.dev's `/v1/querybatch` API. OSV performs version-range matching server-side, including **transitive dependencies** resolved from `package-lock.json` (v2/v3). Lockfiles are exempt from the file-size limit.
+- **New setting `secureScanner.enableOsvOnlineScan`** (default `true`) — Check dependencies online against OSV.dev (only package names and versions are sent, never source code). When disabled or offline, SecureScanner falls back to its built-in rules.
+- **Modern secret detection** — New token rules for GitHub fine-grained PATs (`github_pat_`) and `ghs_`/`ghu_`/`ghr_`, GitLab (`glpat-`), npm (`npm_`), PyPI (`pypi-`), Hugging Face (`hf_`), OpenAI, Anthropic, Google OAuth (`GOCSPX-`), AWS session keys (`ASIA`), Azure storage keys, Stripe (`rk_live_`/`whsec_`), SendGrid, Twilio, Slack webhooks, Sentry DSNs, DigitalOcean, Discord and Telegram.
+- **Quote-optional secret detection with noise filtering** — Generic API-key/password/secret rules now match unquoted values (`.env`, shell, Dockerfile, YAML), with an entropy score and placeholder denylist (`changeme`, `${VAR}`, `{{ template }}`, `<your-key>`, …) to suppress false positives.
+- **Broader OWASP coverage** — SSRF, XXE, open redirect, insecure cookies, JWT auth failures, disabled TLS verification, logging of sensitive data, and insecure deserialization. New language coverage for **C#, Go, PHP, Ruby and Java** (deserialization, command injection, SQL injection, XXE, TLS).
+- **Baseline suppression** — A new "Add to baseline (ignore permanently)" quick fix records a finding's fingerprint in `.securescanner-baseline.json` so it is suppressed in future scans without editing source files.
+- **Cancelable workspace scan** — The workspace scan can now be cancelled, and warns when the 5,000-file cap is reached so results are not silently truncated.
+
+### Fixed
+- **Empty CVE update no longer wipes the database** — An offline/failed "Update CVE Database" can no longer overwrite the rules with empty results and silently disable dependency scanning.
+- **`.jsx`/`.tsx` files are now scanned** — React dialects are normalized to their base language, so JS/TS rules apply to React components.
+- **Suppress comments now work** — `// securescanner-ignore <RULE-ID>` (with the correct comment marker per language) is read back by the engine and suppresses the finding.
+- **OWASP-009 (`yaml.load`)** — Rewritten so safe `Loader=yaml.SafeLoader` calls are no longer flagged, and the catastrophic-backtracking ReDoS is eliminated.
+- **OWASP-003 (`eval`)** — No longer flags `model.eval()` / `df.eval()` (PyTorch/pandas).
+- **Weak-hash rules (MD5/SHA-1)** — Now correctly detect `hashlib.md5`, `CryptoJS.MD5`, Java `MessageDigest.getInstance("SHA-1")`, etc.
+- **Connection-string rule (CRED-010)** — Now covers `postgresql://`, `mongodb+srv://`, `rediss://`, `amqps://`, `mssql://` and basic-auth in HTTP(S) URLs.
+- **Per-file scan debounce** — "Save All" now scans every saved document instead of just the last one.
+- **Dashboard & hover hardening** — Dynamic values are HTML-escaped in the dashboard, and the hover no longer marks dynamic markdown as trusted (prevents command-URI injection).
+- **Ignore-path globbing** — `*.min.js` no longer also matches `admin.json`.
+
 ## [1.1.2] - 2026-04-15
 
 ### Fixed

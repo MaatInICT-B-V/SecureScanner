@@ -28,6 +28,18 @@ export class SecurityCodeActionProvider implements vscode.CodeActionProvider {
       };
       actions.push(suppressAction);
 
+      // Permanently dismiss via the workspace baseline (no source edit).
+      const baselineAction = new vscode.CodeAction(
+        `Add ${codeStr} to baseline (ignore permanently)`,
+        vscode.CodeActionKind.QuickFix
+      );
+      baselineAction.command = {
+        command: 'secureScanner.addToBaseline',
+        title: 'Add to baseline',
+        arguments: [document, diagnostic],
+      };
+      actions.push(baselineAction);
+
       // Specific quick fixes based on rule type
       if (codeStr.startsWith('CRED')) {
         const envAction = new vscode.CodeAction(

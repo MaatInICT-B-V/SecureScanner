@@ -118,10 +118,10 @@ export class DashboardPanel {
       {
         location: vscode.ProgressLocation.Notification,
         title: 'SecureScanner: Scanning workspace...',
-        cancellable: false,
+        cancellable: true,
       },
-      async () => {
-        const findings = await this.engine.scanWorkspace();
+      async (_progress, token) => {
+        const findings = await this.engine.scanWorkspace(token);
         this.panel.webview.postMessage({ type: 'scanStatus', status: 'done', count: findings.length });
         this.refresh();
       }
@@ -758,6 +758,15 @@ export class DashboardPanel {
     const severityNames = ['Critical', 'High', 'Medium', 'Low', 'Info'];
     const severityClasses = ['critical', 'high', 'medium', 'low', 'info'];
 
+    function esc(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
     function renderSummary(findings) {
       const cards = document.getElementById('summaryCards');
       const counts = [0, 0, 0, 0, 0];
@@ -786,10 +795,10 @@ export class DashboardPanel {
         const fileName = f.location.filePath.split(/[\\/\\\\]/).pop();
         html += '<tr class="clickable" data-index="' + idx + '">';
         html += '<td><span class="severity-badge ' + severityClasses[f.severity] + '">' + severityNames[f.severity] + '</span></td>';
-        html += '<td>' + f.id + '</td>';
-        html += '<td>' + f.title + '</td>';
-        html += '<td>' + f.category + '</td>';
-        html += '<td>' + fileName + '</td>';
+        html += '<td>' + esc(f.id) + '</td>';
+        html += '<td>' + esc(f.title) + '</td>';
+        html += '<td>' + esc(f.category) + '</td>';
+        html += '<td>' + esc(fileName) + '</td>';
         html += '<td>' + (f.location.startLine + 1) + '</td>';
         html += '</tr>';
       });
@@ -904,17 +913,17 @@ export class DashboardPanel {
             statusText.textContent = 'All up to date!';
             statusText.style.color = '#4caf50';
           } else {
-            let html = '<div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 8px;">Source: ' + (message.indexUrl || 'PyPI') + '</div>';
+            let html = '<div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 8px;">Source: ' + esc(message.indexUrl || 'PyPI') + '</div>';
             html += '<table><thead><tr>';
             html += '<th>Package</th><th>Current Version</th><th>Latest Version</th><th>Source</th><th>Action</th>';
             html += '</tr></thead><tbody>';
             packages.forEach(function(pkg) {
               html += '<tr>';
-              html += '<td><strong>' + pkg.name + '</strong></td>';
-              html += '<td><span class="severity-badge medium">' + pkg.currentVersion + '</span></td>';
-              html += '<td><span class="severity-badge info" style="background: #4caf50; color: white;">' + pkg.latestVersion + '</span></td>';
+              html += '<td><strong>' + esc(pkg.name) + '</strong></td>';
+              html += '<td><span class="severity-badge medium">' + esc(pkg.currentVersion) + '</span></td>';
+              html += '<td><span class="severity-badge info" style="background: #4caf50; color: white;">' + esc(pkg.latestVersion) + '</span></td>';
               html += '<td style="opacity: 0.7; font-size: 0.9em;">' + (pkg.source === 'installed' ? '&#128187; pip list' : '&#128196; requirements.txt') + '</td>';
-              html += '<td><button class="pkg-update-btn" data-pkg="' + pkg.name + '">&#11014; Update</button></td>';
+              html += '<td><button class="pkg-update-btn" data-pkg="' + esc(pkg.name) + '">&#11014; Update</button></td>';
               html += '</tr>';
             });
             html += '</tbody></table>';

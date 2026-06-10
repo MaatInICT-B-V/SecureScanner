@@ -32,4 +32,6 @@ export interface Finding {
   matchedText?: string;
   cweId?: string;
   owaspId?: string;
+  /** Stable hash used to suppress this finding via the baseline. */
+  fingerprint?: string;
 }

@@ -24,7 +24,10 @@ export class SecurityHoverProvider implements vscode.HoverProvider {
 
       if (range.contains(position)) {
         const md = new vscode.MarkdownString();
-        md.isTrusted = true;
+        // Do NOT trust this markdown: it embeds dynamic text (e.g. OSV
+        // summaries) that could otherwise smuggle a clickable command: URI.
+        // Only theme icons are needed; https links render without trust.
+        md.supportThemeIcons = true;
 
         md.appendMarkdown(`### $(shield) SecureScanner: ${finding.title}\n\n`);
         md.appendMarkdown(`**Severity:** ${severityToLabel(finding.severity)}\n\n`);

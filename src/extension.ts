@@ -71,6 +71,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Auto-scan on open
   context.subscriptions.push(
     vscode.workspace.onDidOpenTextDocument(document => {
+      // A workspace scan opens many documents; don't let those open events
+      // trigger a redundant re-scan of every file.
+      if (engine.isWorkspaceScanRunning()) {
+        return;
+      }
       const config = vscode.workspace.getConfiguration('secureScanner');
       if (config.get<boolean>('enableOnOpen', true)) {
         debouncedScan(document);
@@ -81,7 +86,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Auto-scan on active editor change
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(editor => {
-      if (editor) {
+      if (editor && !engine.isWorkspaceScanRunning()) {
         const config = vscode.workspace.getConfiguration('secureScanner');
         if (config.get<boolean>('enableOnOpen', true)) {
           debouncedScan(editor.document);
@@ -111,13 +116,17 @@ export function activate(context: vscode.ExtensionContext): void {
         {
           location: vscode.ProgressLocation.Notification,
           title: 'SecureScanner: Scanning workspace...',
-          cancellable: false,
+          cancellable: true,
         },
-        async () => {
-          const findings = await engine.scanWorkspace();
-          vscode.window.showInformationMessage(
-            `SecureScanner: Workspace scan complete. Found ${findings.length} issue(s).`
-          );
+        async (_progress, token) => {
+          const findings = await engine.scanWorkspace(token);
+          if (token.isCancellationRequested) {
+            vscode.window.showInformationMessage('SecureScanner: Workspace scan cancelled.');
+          } else {
+            vscode.window.showInformationMessage(
+              `SecureScanner: Workspace scan complete. Found ${findings.length} issue(s).`
+            );
+          }
         }
       );
     })
@@ -152,6 +161,21 @@ export function activate(context: vscode.ExtensionContext): void {
         ` ${marker} securescanner-ignore ${ruleId}`
       );
       vscode.workspace.applyEdit(edit);
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('secureScanner.addToBaseline', (document: vscode.TextDocument, diagnostic: vscode.Diagnostic) => {
+      const rawCode = typeof diagnostic.code === 'object' ? diagnostic.code.value : diagnostic.code;
+      const ruleId = String(rawCode ?? '').split(/\s+/)[0];
+      const ok = engine.addToBaseline(document.uri.fsPath, ruleId, diagnostic.range.start.line);
+      if (ok) {
+        vscode.window.showInformationMessage(
+          `SecureScanner: ${ruleId} added to baseline (.securescanner-baseline.json). It will be suppressed in future scans.`
+        );
+      } else {
+        vscode.window.showWarningMessage('SecureScanner: Could not add finding to baseline (no workspace folder open?).');
+      }
     })
   );
 

@@ -89,7 +89,7 @@ export const credentialRules: IScannerRule[] = [
     description: 'A database connection string with embedded credentials was detected.',
     severity: Severity.High,
     category: FindingCategory.Credential,
-    pattern: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]+@[^/\s]+/gi,
+    pattern: /(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|mariadb|rediss?|amqps?|mssql|sqlserver|https?):\/\/[^:\s/@]+:[^@\s/]+@[^/\s]+/gi,
     cweId: 'CWE-798',
   },
   {

@@ -152,6 +152,11 @@
           "type": "number",
           "default": 512,
           "description": "Maximum file size to scan (in KB)"
+        },
+        "secureScanner.enableOsvOnlineScan": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check dependencies against the OSV.dev vulnerability database online. This sends only package names and versions (never source code) to api.osv.dev and provides accurate, up-to-date results including transitive dependencies from lockfiles. When disabled (or when offline), SecureScanner falls back to its built-in vulnerability rules."
         }
       }
     },

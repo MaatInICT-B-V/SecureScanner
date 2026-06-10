@@ -13,4 +13,5 @@ export interface SecureScannerConfig {
   isTestEnvironment: boolean;
   excludeFolders: string;
   pipIndexUrl: string;
+  enableOsvOnlineScan: boolean;
 }

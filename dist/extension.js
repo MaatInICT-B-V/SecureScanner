@@ -1482,7 +1482,7 @@ var require_min_version = __commonJS({
     var SemVer = require_semver();
     var Range5 = require_range();
     var gt = require_gt();
-    var minVersion2 = (range, loose) => {
+    var minVersion3 = (range, loose) => {
       range = new Range5(range, loose);
       let minver = new SemVer("0.0.0");
       if (range.test(minver)) {
@@ -1530,7 +1530,7 @@ var require_min_version = __commonJS({
       }
       return null;
     };
-    module2.exports = minVersion2;
+    module2.exports = minVersion3;
   }
 });
 
@@ -1902,7 +1902,7 @@ var require_semver2 = __commonJS({
     var toComparators = require_to_comparators();
     var maxSatisfying = require_max_satisfying();
     var minSatisfying = require_min_satisfying();
-    var minVersion2 = require_min_version();
+    var minVersion3 = require_min_version();
     var validRange = require_valid2();
     var outside = require_outside();
     var gtr = require_gtr();
@@ -1940,7 +1940,7 @@ var require_semver2 = __commonJS({
       toComparators,
       maxSatisfying,
       minSatisfying,
-      minVersion: minVersion2,
+      minVersion: minVersion3,
       validRange,
       outside,
       gtr,
@@ -2013,6 +2013,12 @@ function getCommentMarkers(languageId) {
     case "perl":
     case "r":
     case "powershell":
+    case "pip-requirements":
+    case "dotenv":
+    case "properties":
+    case "ini":
+    case "toml":
+    case "makefile":
       return ["#"];
     case "javascript":
     case "typescript":
@@ -2032,6 +2038,39 @@ function getCommentMarkers(languageId) {
       return ["//"];
     default:
       return ["//", "#"];
+  }
+}
+function getLineCommentMarker(languageId) {
+  return getCommentMarkers(languageId)[0];
+}
+var SUPPRESS_MARKER = "securescanner-ignore";
+function lineSuppresses(ruleId, lineText) {
+  const idx = lineText.indexOf(SUPPRESS_MARKER);
+  if (idx === -1) {
+    return false;
+  }
+  const rest = lineText.substring(idx + SUPPRESS_MARKER.length).trim();
+  if (rest.length === 0) {
+    return true;
+  }
+  return rest.split(/[\s,]+/).includes(ruleId);
+}
+function getLineText(content, lineOffsets, line) {
+  if (line < 0 || line >= lineOffsets.length) {
+    return "";
+  }
+  const start = lineOffsets[line];
+  const end = line + 1 < lineOffsets.length ? lineOffsets[line + 1] - 1 : content.length;
+  return content.substring(start, end);
+}
+function normalizeLanguageId(languageId) {
+  switch (languageId) {
+    case "javascriptreact":
+      return "javascript";
+    case "typescriptreact":
+      return "typescript";
+    default:
+      return languageId;
   }
 }
 function buildCommentRanges(content, languageId, lineOffsets) {
@@ -2121,7 +2160,9 @@ function executeRule(rule, context, lineOffsets, commentRanges) {
     return findings;
   }
   if (rule.languages && rule.languages.length > 0) {
-    if (!rule.languages.includes(context.languageId)) {
+    const contextLanguage = normalizeLanguageId(context.languageId);
+    const ruleLanguages = rule.languages.map(normalizeLanguageId);
+    if (!ruleLanguages.includes(contextLanguage)) {
       return findings;
     }
   }
@@ -2149,6 +2190,14 @@ function executeRule(rule, context, lineOffsets, commentRanges) {
     }
     const start = offsetToPosition(match.index, lineOffsets);
     const end = offsetToPosition(match.index + match[0].length, lineOffsets);
+    const onLine = getLineText(context.content, lineOffsets, start.line);
+    const aboveLine = getLineText(context.content, lineOffsets, start.line - 1);
+    if (lineSuppresses(rule.id, onLine) || lineSuppresses(rule.id, aboveLine)) {
+      if (match[0].length === 0) {
+        regex.lastIndex++;
+      }
+      continue;
+    }
     const location = {
       filePath: context.filePath,
       startLine: start.line,
@@ -2284,7 +2333,7 @@ var credentialRules = [
     description: "A database connection string with embedded credentials was detected.",
     severity: 1 /* High */,
     category: "credential" /* Credential */,
-    pattern: /(?:mongodb|postgres|mysql|redis|amqp):\/\/[^:\s]+:[^@\s]+@[^/\s]+/gi,
+    pattern: /(?:mongodb(?:\+srv)?|postgres(?:ql)?|mysql|mariadb|rediss?|amqps?|mssql|sqlserver|https?):\/\/[^:\s/@]+:[^@\s/]+@[^/\s]+/gi,
     cweId: "CWE-798"
   },
   {
@@ -2425,7 +2474,7 @@ var owaspRules = [
     description: "yaml.load() without SafeLoader can execute arbitrary code. Use yaml.safe_load() instead.",
     severity: 1 /* High */,
     category: "owasp" /* OWASP */,
-    pattern: /yaml\.load\s*\([^)]*(?!Loader\s*=\s*yaml\.SafeLoader)[^)]*\)/g,
+    pattern: /yaml\.load\s*\((?![^)]*SafeLoader)[^)]*\)/g,
     languages: ["python"],
     cweId: "CWE-502",
     owaspId: "A08:2021"
@@ -3338,17 +3387,289 @@ var FileHygieneScanner = class {
   }
 };
 
+// src/engine/dependencyResolver.ts
+var semver2 = __toESM(require_semver2());
+function findLine(content, needle) {
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(needle)) {
+      return i;
+    }
+  }
+  return 0;
+}
+function parsePackageLock(content, manifestPath) {
+  const deps = [];
+  let lock;
+  try {
+    lock = JSON.parse(content);
+  } catch {
+    return deps;
+  }
+  if (!lock || typeof lock !== "object") {
+    return deps;
+  }
+  const lockObj = lock;
+  const packages = lockObj.packages;
+  if (packages) {
+    for (const [pkgPath, info] of Object.entries(packages)) {
+      if (!pkgPath || !info || info.link || !info.version) {
+        continue;
+      }
+      const marker = "node_modules/";
+      const idx = pkgPath.lastIndexOf(marker);
+      const name = info.name || (idx >= 0 ? pkgPath.substring(idx + marker.length) : pkgPath);
+      if (!name) {
+        continue;
+      }
+      deps.push({
+        ecosystem: "npm",
+        name,
+        version: info.version,
+        resolved: true,
+        manifestPath,
+        line: findLine(content, `"${pkgPath}"`)
+      });
+    }
+    if (deps.length > 0) {
+      return deps;
+    }
+  }
+  const walk = (tree) => {
+    if (!tree) {
+      return;
+    }
+    for (const [name, info] of Object.entries(tree)) {
+      if (info && info.version) {
+        deps.push({
+          ecosystem: "npm",
+          name,
+          version: info.version,
+          resolved: true,
+          manifestPath,
+          line: findLine(content, `"${name}"`)
+        });
+      }
+      if (info && info.dependencies) {
+        walk(info.dependencies);
+      }
+    }
+  };
+  walk(lockObj.dependencies);
+  return deps;
+}
+function parsePackageJson(content, manifestPath) {
+  const deps = [];
+  let pkg;
+  try {
+    pkg = JSON.parse(content);
+  } catch {
+    return deps;
+  }
+  const all = { ...pkg.dependencies, ...pkg.devDependencies };
+  for (const [name, range] of Object.entries(all)) {
+    if (!range || range.includes(":") || range === "*" || range === "x" || range === "latest") {
+      continue;
+    }
+    const min = semver2.minVersion(range);
+    if (!min || min.version === "0.0.0") {
+      continue;
+    }
+    deps.push({
+      ecosystem: "npm",
+      name,
+      version: min.version,
+      resolved: false,
+      manifestPath,
+      line: findLine(content, `"${name}"`)
+    });
+  }
+  return deps;
+}
+function normalizePyPiName(name) {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+function parseRequirementsTxt(content, manifestPath) {
+  const deps = [];
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i].trim();
+    if (!line || line.startsWith("#") || line.startsWith("-")) {
+      continue;
+    }
+    line = line.split(" #")[0].split(";")[0].trim();
+    const match = line.match(/^([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*(==|===|>=|~=)\s*([A-Za-z0-9.*+!-]+)/);
+    if (!match) {
+      continue;
+    }
+    const [, rawName, op, version] = match;
+    if (version.includes("*")) {
+      continue;
+    }
+    deps.push({
+      ecosystem: "PyPI",
+      name: normalizePyPiName(rawName),
+      version,
+      resolved: op === "==" || op === "===",
+      manifestPath,
+      line: i
+    });
+  }
+  return deps;
+}
+
+// src/engine/osvClient.ts
+var https = __toESM(require("https"));
+var OSV_HOST = "api.osv.dev";
+var BATCH_LIMIT = 1e3;
+var DETAIL_CONCURRENCY = 8;
+function request2(method, path6, body) {
+  return new Promise((resolve, reject) => {
+    const headers = { "Content-Type": "application/json" };
+    if (body !== void 0) {
+      headers["Content-Length"] = Buffer.byteLength(body);
+    }
+    const options = {
+      hostname: OSV_HOST,
+      path: path6,
+      method,
+      headers
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => data += chunk);
+      res.on("end", () => {
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(data);
+        } else {
+          reject(new Error(`OSV HTTP ${res.statusCode}: ${data.substring(0, 200)}`));
+        }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(3e4, () => {
+      req.destroy();
+      reject(new Error("OSV request timeout"));
+    });
+    if (body !== void 0) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+async function osvQueryBatch(queries) {
+  const out = [];
+  for (let offset = 0; offset < queries.length; offset += BATCH_LIMIT) {
+    const chunk = queries.slice(offset, offset + BATCH_LIMIT);
+    const body = JSON.stringify({
+      queries: chunk.map((q) => ({
+        version: q.version,
+        package: { name: q.name, ecosystem: q.ecosystem }
+      }))
+    });
+    const response = await request2("POST", "/v1/querybatch", body);
+    const parsed = JSON.parse(response);
+    const results = parsed.results || [];
+    for (let i = 0; i < chunk.length; i++) {
+      const vulns = results[i]?.vulns || [];
+      out.push(vulns.map((v) => v.id));
+    }
+  }
+  return out;
+}
+async function osvGetVuln(id) {
+  const response = await request2("GET", `/v1/vulns/${encodeURIComponent(id)}`);
+  return JSON.parse(response);
+}
+async function osvGetVulns(ids) {
+  const unique = [...new Set(ids)];
+  const map = /* @__PURE__ */ new Map();
+  let cursor = 0;
+  async function worker() {
+    while (cursor < unique.length) {
+      const id = unique[cursor++];
+      try {
+        map.set(id, await osvGetVuln(id));
+      } catch {
+      }
+    }
+  }
+  const workers = Array.from(
+    { length: Math.min(DETAIL_CONCURRENCY, unique.length) },
+    () => worker()
+  );
+  await Promise.all(workers);
+  return map;
+}
+function osvSeverity(vuln) {
+  if (vuln.severity) {
+    for (const s of vuln.severity) {
+      const score = parseFloat(s.score);
+      if (!isNaN(score)) {
+        if (score >= 9) {
+          return "critical";
+        }
+        if (score >= 7) {
+          return "high";
+        }
+        if (score >= 4) {
+          return "medium";
+        }
+        return "low";
+      }
+    }
+  }
+  const dbSeverity = vuln.database_specific?.severity?.toLowerCase();
+  if (dbSeverity === "critical") {
+    return "critical";
+  }
+  if (dbSeverity === "high") {
+    return "high";
+  }
+  if (dbSeverity === "moderate" || dbSeverity === "medium") {
+    return "medium";
+  }
+  if (dbSeverity === "low") {
+    return "low";
+  }
+  return "medium";
+}
+function osvFixedVersion(vuln, name, ecosystem) {
+  if (!vuln.affected) {
+    return "";
+  }
+  for (const affected of vuln.affected) {
+    if (!affected.package || affected.package.name.toLowerCase() !== name.toLowerCase() || affected.package.ecosystem.toLowerCase() !== ecosystem.toLowerCase()) {
+      continue;
+    }
+    for (const range of affected.ranges || []) {
+      if (range.type === "GIT") {
+        continue;
+      }
+      for (const event of range.events) {
+        if (event.fixed) {
+          return event.fixed;
+        }
+      }
+    }
+  }
+  return "";
+}
+
 // src/engine/scannerEngine.ts
 var ScannerEngine = class {
   constructor() {
     this._onFindingsChanged = new vscode2.EventEmitter();
     this.onFindingsChanged = this._onFindingsChanged.event;
     this.findingsMap = /* @__PURE__ */ new Map();
+    // Dependency scanning is async (OSV network query), so it runs outside the
+    // synchronous per-file registry loop. Concurrent triggers share one run.
+    this.depScanPromise = null;
+    this.workspaceScanRunning = false;
     this.registry = new ScannerRegistry();
     this.registry.register(new CredentialScanner());
     this.registry.register(new OwaspScanner());
     this.dependencyScanner = new DependencyScanner();
-    this.registry.register(this.dependencyScanner);
     this.registry.register(new MisconfigScanner());
     this.fileHygieneScanner = new FileHygieneScanner();
     this.registry.register(this.fileHygieneScanner);
@@ -3357,12 +3678,17 @@ var ScannerEngine = class {
     try {
       const data = fs2.readFileSync(vulnDbPath, "utf8");
       const db = JSON.parse(data);
-      if (db.npmVulnerabilities && db.pipVulnerabilities) {
-        this.dependencyScanner.updateVulnerabilities(
-          db.npmVulnerabilities,
-          db.pipVulnerabilities
-        );
+      const npm = Array.isArray(db.npmVulnerabilities) ? db.npmVulnerabilities : null;
+      const pip = Array.isArray(db.pipVulnerabilities) ? db.pipVulnerabilities : null;
+      if (!npm || !pip) {
+        console.warn("SecureScanner: external vulnerability DB malformed, keeping built-in rules");
+        return;
       }
+      if (npm.length === 0 && pip.length === 0) {
+        console.warn("SecureScanner: external vulnerability DB is empty, keeping built-in rules");
+        return;
+      }
+      this.dependencyScanner.updateVulnerabilities(npm, pip);
     } catch {
       console.warn("SecureScanner: Could not load external vulnerability database");
     }
@@ -3397,12 +3723,16 @@ var ScannerEngine = class {
       projectType: config.get("projectType", "auto"),
       isTestEnvironment: config.get("isTestEnvironment", false),
       excludeFolders: config.get("excludeFolders", "results"),
-      pipIndexUrl: config.get("pipIndexUrl", "https://pypi.org/pypi")
+      pipIndexUrl: config.get("pipIndexUrl", "https://pypi.org/pypi"),
+      enableOsvOnlineScan: config.get("enableOsvOnlineScan", true)
     };
   }
   scanDocument(document) {
     const config = this.getConfig();
     const filePath = document.uri.fsPath;
+    if (!this.workspaceScanRunning && this.isManifestFile(filePath)) {
+      void this.scanDependencies();
+    }
     const content = document.getText();
     if (content.length > config.maxFileSizeKB * 1024) {
       return [];
@@ -3463,6 +3793,7 @@ var ScannerEngine = class {
       5e3
       // max files
     );
+    this.workspaceScanRunning = true;
     for (const file of files) {
       try {
         const document = await vscode2.workspace.openTextDocument(file);
@@ -3470,6 +3801,11 @@ var ScannerEngine = class {
         allFindings.push(...findings);
       } catch {
       }
+    }
+    this.workspaceScanRunning = false;
+    if (config.enabledCategories.includes("dependency" /* Dependency */)) {
+      const depFindings = await this.scanDependencies();
+      allFindings.push(...depFindings);
     }
     if (config.enabledCategories.includes("filehygiene" /* FileHygiene */)) {
       const workspaceFolders = vscode2.workspace.workspaceFolders;
@@ -3485,6 +3821,213 @@ var ScannerEngine = class {
       }
     }
     return allFindings;
+  }
+  isManifestFile(filePath) {
+    const name = path2.basename(filePath);
+    return name === "package.json" || name === "package-lock.json" || name === "requirements.txt";
+  }
+  /**
+   * Scan the workspace's dependencies for known vulnerabilities. Concurrent
+   * callers share a single in-flight run so rapid manifest saves do not trigger
+   * redundant OSV queries. Findings are merged into the findings map and an
+   * onFindingsChanged event is fired when the run completes.
+   */
+  scanDependencies() {
+    if (this.depScanPromise) {
+      return this.depScanPromise;
+    }
+    this.depScanPromise = this.runDependencyScan().finally(() => {
+      this.depScanPromise = null;
+    });
+    return this.depScanPromise;
+  }
+  async runDependencyScan() {
+    const config = this.getConfig();
+    if (!config.enabledCategories.includes("dependency" /* Dependency */)) {
+      return [];
+    }
+    const manifests = await this.discoverManifests(config);
+    if (manifests.length === 0) {
+      return [];
+    }
+    const { deps, manifestFiles } = this.resolveDependencies(manifests);
+    if (deps.length === 0) {
+      return [];
+    }
+    let findings;
+    if (config.enableOsvOnlineScan) {
+      try {
+        findings = await this.scanWithOsv(deps);
+      } catch {
+        findings = this.scanWithBuiltinRules(manifestFiles);
+      }
+    } else {
+      findings = this.scanWithBuiltinRules(manifestFiles);
+    }
+    findings = findings.filter((f) => f.severity <= config.severityThreshold);
+    this.mergeDependencyFindings(findings);
+    this._onFindingsChanged.fire(this.findingsMap);
+    return findings;
+  }
+  async discoverManifests(config) {
+    const effectiveIgnorePaths = [...config.ignorePaths];
+    const excludeFolders = config.excludeFolders.split(";").map((f) => f.trim()).filter((f) => f.length > 0);
+    for (const folder of excludeFolders) {
+      effectiveIgnorePaths.push(`**/${folder}/**`);
+    }
+    if (!effectiveIgnorePaths.some((p) => p.includes("node_modules"))) {
+      effectiveIgnorePaths.push("**/node_modules/**");
+    }
+    const ignorePattern = effectiveIgnorePaths.length > 0 ? "{" + effectiveIgnorePaths.join(",") + "}" : void 0;
+    const files = await vscode2.workspace.findFiles(
+      "**/{package.json,package-lock.json,requirements.txt}",
+      ignorePattern,
+      2e3
+    );
+    const out = [];
+    for (const file of files) {
+      try {
+        const content = fs2.readFileSync(file.fsPath, "utf8");
+        out.push({ path: file.fsPath, content, fileName: path2.basename(file.fsPath) });
+      } catch {
+      }
+    }
+    return out;
+  }
+  resolveDependencies(manifests) {
+    const byDir = /* @__PURE__ */ new Map();
+    const reqFiles = [];
+    const manifestFiles = [];
+    for (const m of manifests) {
+      const dir = path2.dirname(m.path);
+      if (m.fileName === "package.json") {
+        const entry = byDir.get(dir) || {};
+        entry.pkg = m;
+        byDir.set(dir, entry);
+        manifestFiles.push(m);
+      } else if (m.fileName === "package-lock.json") {
+        const entry = byDir.get(dir) || {};
+        entry.lock = m;
+        byDir.set(dir, entry);
+      } else if (m.fileName === "requirements.txt") {
+        reqFiles.push(m);
+        manifestFiles.push(m);
+      }
+    }
+    const deps = [];
+    for (const { pkg, lock } of byDir.values()) {
+      if (lock) {
+        deps.push(...parsePackageLock(lock.content, lock.path));
+      } else if (pkg) {
+        deps.push(...parsePackageJson(pkg.content, pkg.path));
+      }
+    }
+    for (const req of reqFiles) {
+      deps.push(...parseRequirementsTxt(req.content, req.path));
+    }
+    return { deps, manifestFiles };
+  }
+  async scanWithOsv(deps) {
+    const keyOf = (d) => `${d.ecosystem}|${d.name}|${d.version}`;
+    const uniqueQueries = /* @__PURE__ */ new Map();
+    for (const d of deps) {
+      const k = keyOf(d);
+      if (!uniqueQueries.has(k)) {
+        uniqueQueries.set(k, { name: d.name, ecosystem: d.ecosystem, version: d.version });
+      }
+    }
+    const queries = [...uniqueQueries.values()];
+    const idsPerQuery = await osvQueryBatch(queries);
+    const idsByKey = /* @__PURE__ */ new Map();
+    queries.forEach((q, i) => idsByKey.set(keyOf(q), idsPerQuery[i] || []));
+    const allIds = idsPerQuery.flat();
+    if (allIds.length === 0) {
+      return [];
+    }
+    const details = await osvGetVulns(allIds);
+    const findings = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const d of deps) {
+      const ids = idsByKey.get(keyOf(d)) || [];
+      for (const id of ids) {
+        const dedupKey = `${d.manifestPath}|${d.name}|${id}`;
+        if (seen.has(dedupKey)) {
+          continue;
+        }
+        seen.add(dedupKey);
+        const detail = details.get(id);
+        const severity = detail ? osvSeverity(detail) : "medium";
+        const fixed = detail ? osvFixedVersion(detail, d.name, d.ecosystem) : "";
+        const summary = detail?.summary || detail?.details?.substring(0, 200) || "Known security vulnerability";
+        const fixNote = fixed ? ` Update to ${fixed} or later.` : "";
+        const versionNote = d.resolved ? "" : " (declared range lower bound)";
+        findings.push({
+          id: `DEP-${id}`,
+          category: "dependency" /* Dependency */,
+          severity: this.mapSeverityString(severity),
+          title: `Vulnerable dependency: ${d.name}@${d.version}${versionNote}`,
+          description: `${summary} (${id}).${fixNote}`,
+          location: {
+            filePath: d.manifestPath,
+            startLine: d.line,
+            startColumn: 0,
+            endLine: d.line,
+            endColumn: 1e3
+          },
+          cweId: "CWE-1035"
+        });
+      }
+    }
+    return findings;
+  }
+  scanWithBuiltinRules(manifestFiles) {
+    const findings = [];
+    for (const m of manifestFiles) {
+      const context = {
+        filePath: m.path,
+        content: m.content,
+        languageId: "",
+        isTestEnvironment: false
+      };
+      findings.push(...this.dependencyScanner.scan(context));
+    }
+    return findings;
+  }
+  /**
+   * Replace dependency findings everywhere with a fresh set, preserving findings
+   * from other categories on the same files (e.g. a secret inside package.json).
+   */
+  mergeDependencyFindings(findings) {
+    for (const [filePath, existing] of this.findingsMap) {
+      const nonDep = existing.filter((f) => f.category !== "dependency" /* Dependency */);
+      if (nonDep.length !== existing.length) {
+        this.findingsMap.set(filePath, nonDep);
+      }
+    }
+    const byPath = /* @__PURE__ */ new Map();
+    for (const f of findings) {
+      const arr = byPath.get(f.location.filePath) || [];
+      arr.push(f);
+      byPath.set(f.location.filePath, arr);
+    }
+    for (const [filePath, depFindings] of byPath) {
+      const existing = this.findingsMap.get(filePath) || [];
+      this.findingsMap.set(filePath, [...existing, ...depFindings]);
+    }
+  }
+  mapSeverityString(severity) {
+    switch (severity) {
+      case "critical":
+        return 0 /* Critical */;
+      case "high":
+        return 1 /* High */;
+      case "medium":
+        return 2 /* Medium */;
+      case "low":
+        return 3 /* Low */;
+      default:
+        return 4 /* Info */;
+    }
   }
   getAllFindings() {
     return new Map(this.findingsMap);
@@ -3870,7 +4413,7 @@ var path4 = __toESM(require("path"));
 var fs3 = __toESM(require("fs"));
 
 // src/engine/vulnDbUpdater.ts
-var https = __toESM(require("https"));
+var https2 = __toESM(require("https"));
 var POPULAR_NPM_PACKAGES = [
   "lodash",
   "express",
@@ -3971,7 +4514,7 @@ function httpsPost(url, data) {
         "Content-Length": Buffer.byteLength(data)
       }
     };
-    const req = https.request(options, (res) => {
+    const req = https2.request(options, (res) => {
       let body = "";
       res.on("data", (chunk) => body += chunk);
       res.on("end", () => {
@@ -4117,16 +4660,16 @@ async function fetchVulnerabilityUpdates(progress) {
 
 // src/engine/pipUpdateChecker.ts
 var vscode8 = __toESM(require("vscode"));
-var https2 = __toESM(require("https"));
+var https3 = __toESM(require("https"));
 var http = __toESM(require("http"));
-var semver2 = __toESM(require_semver2());
+var semver3 = __toESM(require_semver2());
 var import_child_process = require("child_process");
 function isNexusSearchUrl(indexUrl) {
   return /\/service\/rest\/v[0-9]+\/search\b/i.test(indexUrl);
 }
 function httpGet(url) {
   return new Promise((resolve) => {
-    const client = url.startsWith("https") ? https2 : http;
+    const client = url.startsWith("https") ? https3 : http;
     const req = client.get(url, (res) => {
       if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         httpGet(res.headers.location).then(resolve);
@@ -4183,10 +4726,10 @@ async function fetchLatestVersionFromNexus(packageName, searchUrl) {
     return null;
   }
   allVersions.sort((a, b) => {
-    const sa = semver2.coerce(a);
-    const sb = semver2.coerce(b);
+    const sa = semver3.coerce(a);
+    const sb = semver3.coerce(b);
     if (sa && sb) {
-      return semver2.compare(sb, sa);
+      return semver3.compare(sb, sa);
     }
     return 0;
   });
@@ -4215,7 +4758,7 @@ function fetchLatestVersion(packageName, indexUrl) {
   }
   return fetchLatestVersionFromPyPI(packageName, indexUrl);
 }
-function parseRequirementsTxt(content) {
+function parseRequirementsTxt2(content) {
   const packages = [];
   const lines = content.split("\n");
   for (const rawLine of lines) {
@@ -4278,7 +4821,7 @@ async function checkPipUpdates(indexUrl, progress) {
   for (const file of files) {
     try {
       const doc = await vscode8.workspace.openTextDocument(file);
-      const parsed = parseRequirementsTxt(doc.getText());
+      const parsed = parseRequirementsTxt2(doc.getText());
       for (const pkg of parsed) {
         const key = pkg.name.toLowerCase();
         if (!allPackages.has(key)) {
@@ -4300,9 +4843,9 @@ async function checkPipUpdates(indexUrl, progress) {
     });
     const latestVersion = await fetchLatestVersion(name, indexUrl);
     if (latestVersion) {
-      const current = semver2.coerce(currentVersion);
-      const latest = semver2.coerce(latestVersion);
-      const updateAvailable = current && latest ? semver2.lt(current, latest) : false;
+      const current = semver3.coerce(currentVersion);
+      const latest = semver3.coerce(latestVersion);
+      const updateAvailable = current && latest ? semver3.lt(current, latest) : false;
       if (updateAvailable) {
         results.push({
           name,
@@ -4435,6 +4978,13 @@ var DashboardPanel = class _DashboardPanel {
           return await fetchVulnerabilityUpdates(progress);
         }
       );
+      if (result.npm.length === 0 && result.pip.length === 0) {
+        this.panel.webview.postMessage({ type: "vulnDbStatus", status: "error" });
+        vscode9.window.showErrorMessage(
+          "SecureScanner: Update returned no vulnerabilities \u2014 likely offline or OSV.dev unreachable. Existing rules kept."
+        );
+        return;
+      }
       const globalStoragePath = this.globalStorageUri.fsPath;
       const vulnDbPath = path4.join(globalStoragePath, "vulnDb.json");
       const vulnDbData = {
@@ -5255,13 +5805,21 @@ function getNonce() {
 }
 
 // src/utils/debounce.ts
-function debounce(fn, delay) {
-  let timer;
+function debounceByKey(fn, delay, keyFn) {
+  const timers = /* @__PURE__ */ new Map();
   return (...args) => {
-    if (timer) {
-      clearTimeout(timer);
+    const key = keyFn(...args);
+    const existing = timers.get(key);
+    if (existing) {
+      clearTimeout(existing);
     }
-    timer = setTimeout(() => fn(...args), delay);
+    timers.set(
+      key,
+      setTimeout(() => {
+        timers.delete(key);
+        fn(...args);
+      }, delay)
+    );
   };
 }
 
@@ -5292,9 +5850,13 @@ function activate(context) {
       { providedCodeActionKinds: [vscode10.CodeActionKind.QuickFix] }
     )
   );
-  const debouncedScan = debounce((document) => {
-    engine.scanDocument(document);
-  }, 300);
+  const debouncedScan = debounceByKey(
+    (document) => {
+      engine.scanDocument(document);
+    },
+    300,
+    (document) => document.uri.toString()
+  );
   context.subscriptions.push(
     vscode10.workspace.onDidSaveTextDocument((document) => {
       const config = vscode10.workspace.getConfiguration("secureScanner");
@@ -5367,11 +5929,13 @@ function activate(context) {
     vscode10.commands.registerCommand("secureScanner.suppressFinding", (document, diagnostic) => {
       const edit = new vscode10.WorkspaceEdit();
       const line = document.lineAt(diagnostic.range.start.line);
-      const code = typeof diagnostic.code === "object" ? diagnostic.code.value : diagnostic.code;
+      const rawCode = typeof diagnostic.code === "object" ? diagnostic.code.value : diagnostic.code;
+      const ruleId = String(rawCode ?? "").split(/\s+/)[0];
+      const marker = getLineCommentMarker(document.languageId);
       edit.insert(
         document.uri,
         line.range.end,
-        ` // securescanner-ignore ${code}`
+        ` ${marker} securescanner-ignore ${ruleId}`
       );
       vscode10.workspace.applyEdit(edit);
     })

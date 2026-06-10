@@ -7,7 +7,8 @@ import { FindingsTreeViewProvider } from './providers/treeViewProvider';
 import { SecurityCodeActionProvider } from './providers/codeActionProvider';
 import { SecurityHoverProvider } from './providers/hoverProvider';
 import { DashboardPanel } from './webview/dashboardPanel';
-import { debounce } from './utils/debounce';
+import { debounceByKey } from './utils/debounce';
+import { getLineCommentMarker } from './engine/ruleEngine';
 
 let engine: ScannerEngine;
 
@@ -47,10 +48,15 @@ export function activate(context: vscode.ExtensionContext): void {
     )
   );
 
-  // Debounced scan function
-  const debouncedScan = debounce((document: vscode.TextDocument) => {
-    engine.scanDocument(document);
-  }, 300);
+  // Debounced scan function, keyed per document so that "Save All" (which fires
+  // one save event per document) scans every document instead of just the last.
+  const debouncedScan = debounceByKey(
+    (document: vscode.TextDocument) => {
+      engine.scanDocument(document);
+    },
+    300,
+    document => document.uri.toString()
+  );
 
   // Auto-scan on save
   context.subscriptions.push(
@@ -135,11 +141,15 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('secureScanner.suppressFinding', (document: vscode.TextDocument, diagnostic: vscode.Diagnostic) => {
       const edit = new vscode.WorkspaceEdit();
       const line = document.lineAt(diagnostic.range.start.line);
-      const code = typeof diagnostic.code === 'object' ? diagnostic.code.value : diagnostic.code;
+      // diagnostic.code is "RULE-ID (CWE-xxx)" when a CWE is attached — keep only
+      // the rule id so the engine can match the suppression token.
+      const rawCode = typeof diagnostic.code === 'object' ? diagnostic.code.value : diagnostic.code;
+      const ruleId = String(rawCode ?? '').split(/\s+/)[0];
+      const marker = getLineCommentMarker(document.languageId);
       edit.insert(
         document.uri,
         line.range.end,
-        ` // securescanner-ignore ${code}`
+        ` ${marker} securescanner-ignore ${ruleId}`
       );
       vscode.workspace.applyEdit(edit);
     })

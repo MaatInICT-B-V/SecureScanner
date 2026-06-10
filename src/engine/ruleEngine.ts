@@ -19,6 +19,12 @@ function getCommentMarkers(languageId: string): string[] {
     case 'perl':
     case 'r':
     case 'powershell':
+    case 'pip-requirements':
+    case 'dotenv':
+    case 'properties':
+    case 'ini':
+    case 'toml':
+    case 'makefile':
       return ['#'];
     case 'javascript':
     case 'typescript':
@@ -38,6 +44,65 @@ function getCommentMarkers(languageId: string): string[] {
       return ['//'];
     default:
       return ['//', '#'];
+  }
+}
+
+/**
+ * Return the primary single-line comment marker for a language. Used when
+ * writing a suppression comment so it is valid for the file's language
+ * (e.g. '#' for Python/YAML/requirements.txt instead of a hard-coded '//').
+ */
+export function getLineCommentMarker(languageId: string): string {
+  return getCommentMarkers(languageId)[0];
+}
+
+const SUPPRESS_MARKER = 'securescanner-ignore';
+
+/**
+ * Determine whether a line of source carries a suppression directive for the
+ * given rule. A bare `securescanner-ignore` suppresses every rule on that line;
+ * `securescanner-ignore RULE-ID [RULE-ID...]` suppresses only the listed rules.
+ * Tolerates the legacy composite form ("RULE-ID (CWE-xxx)") since the rule id
+ * still appears as its own token.
+ */
+function lineSuppresses(ruleId: string, lineText: string): boolean {
+  const idx = lineText.indexOf(SUPPRESS_MARKER);
+  if (idx === -1) {
+    return false;
+  }
+  const rest = lineText.substring(idx + SUPPRESS_MARKER.length).trim();
+  if (rest.length === 0) {
+    return true;
+  }
+  return rest.split(/[\s,]+/).includes(ruleId);
+}
+
+/**
+ * Read the text of a given (0-based) line from content using the line offset index.
+ */
+function getLineText(content: string, lineOffsets: number[], line: number): string {
+  if (line < 0 || line >= lineOffsets.length) {
+    return '';
+  }
+  const start = lineOffsets[line];
+  const end = line + 1 < lineOffsets.length ? lineOffsets[line + 1] - 1 : content.length;
+  return content.substring(start, end);
+}
+
+/**
+ * Normalize language dialects to their base family so that rules which only
+ * declare the base language (e.g. javascript/typescript) still apply to their
+ * dialects. Without this, React files (javascriptreact/typescriptreact) are
+ * skipped by nearly every rule and scanned for nothing.
+ */
+function normalizeLanguageId(languageId: string): string {
+  switch (languageId) {
+    case 'javascriptreact':
+      return 'javascript';
+    case 'typescriptreact':
+      return 'typescript';
+    default:
+      return languageId;
   }
 }
 
@@ -162,9 +227,12 @@ function executeRule(
     return findings;
   }
 
-  // Check language filter
+  // Check language filter (dialects normalized to their family, so React
+  // variants are scanned by rules that only declare javascript/typescript)
   if (rule.languages && rule.languages.length > 0) {
-    if (!rule.languages.includes(context.languageId)) {
+    const contextLanguage = normalizeLanguageId(context.languageId);
+    const ruleLanguages = rule.languages.map(normalizeLanguageId);
+    if (!ruleLanguages.includes(contextLanguage)) {
       return findings;
     }
   }
@@ -202,6 +270,16 @@ function executeRule(
 
     const start = offsetToPosition(match.index, lineOffsets);
     const end = offsetToPosition(match.index + match[0].length, lineOffsets);
+
+    // Honor suppression comments on the match line or the line directly above.
+    const onLine = getLineText(context.content, lineOffsets, start.line);
+    const aboveLine = getLineText(context.content, lineOffsets, start.line - 1);
+    if (lineSuppresses(rule.id, onLine) || lineSuppresses(rule.id, aboveLine)) {
+      if (match[0].length === 0) {
+        regex.lastIndex++;
+      }
+      continue;
+    }
 
     const location: FindingLocation = {
       filePath: context.filePath,

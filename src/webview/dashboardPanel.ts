@@ -144,6 +144,18 @@ export class DashboardPanel {
         }
       );
 
+      // Guard against an offline/failed update: queryOsv swallows network errors
+      // and returns [], so a total failure surfaces here as an empty result.
+      // Persisting that would overwrite a good DB and wipe the built-in rules,
+      // so treat "nothing at all" as a failed update and keep existing rules.
+      if (result.npm.length === 0 && result.pip.length === 0) {
+        this.panel.webview.postMessage({ type: 'vulnDbStatus', status: 'error' });
+        vscode.window.showErrorMessage(
+          'SecureScanner: Update returned no vulnerabilities — likely offline or OSV.dev unreachable. Existing rules kept.'
+        );
+        return;
+      }
+
       // Save updated rules to global storage (persists across updates)
       const globalStoragePath = this.globalStorageUri.fsPath;
       const vulnDbPath = path.join(globalStoragePath, 'vulnDb.json');
